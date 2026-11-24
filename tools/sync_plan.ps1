@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   sync_plan.ps1 — автозаливка плана: шифрует ПЛАН.md и коммитит data/plan.enc в GitHub-репо.
 
