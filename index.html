@@ -197,6 +197,7 @@
     min-height: 38px;
   }
   .btn-logout:active { background: var(--accent-soft); }
+  a.btn-logout { display: inline-flex; align-items: center; text-decoration: none; }
   /* чипы-навигация по секциям */
   .chips {
     max-width: 740px; margin: 0 auto;
@@ -385,6 +386,7 @@
     <div class="topbar-main">
       <h1 class="topbar-title"><span aria-hidden="true">📋</span>План</h1>
       <div class="topbar-date" id="topbar-date"></div>
+      <a class="btn-logout btn-nav" href="avito.html">Статистика Авито</a>
       <button type="button" class="btn-logout" id="lock-again">Выйти</button>
     </div>
     <nav class="chips" id="chips" aria-label="Секции плана"></nav>

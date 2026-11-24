@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1115">
+<title>Статистика Авито — доступ по паролю</title>
+
+<!--
+  ==========================================================================
+  КОНТРАКТ С ДАННЫМИ (шифрование НЕ менять — идентично index.html):
+  --------------------------------------------------------------------------
+  1) Источник: fetch('data/avito.enc') → текст = base64 = base64(salt‖iv‖ct),
+     salt 16 Б, iv 12 Б, ct = AES-256-GCM + auth-tag 16 Б (в конце).
+  2) Ключ: PBKDF2-HMAC-SHA256(password, salt, 200000, 32 Б) → AES-256-GCM.
+     Пароль только из поля пользователя; сессия — sessionStorage
+     (тот же ключ 'plan_pw_v1', что и у плана: переход по ссылке — авто-вход).
+  3) Расшифрованный текст = JSON:
+     { updated: "ГГГГ-ММ-ДД",
+       rows: [ {date, item, impressions, views, contacts, bookings, source} ],
+       edits: ["ГГГГ-ММ-ДД", ...] }   // даты правок из журнала изменений
+     bookings: null = данных нет.
+  4) Ошибка GCM tag → «Неверный пароль»; нет файла → «Не удалось загрузить».
+  ==========================================================================
+-->
+
+<style>
+  /* ============ Токены: светлая / тёмная тема (как в index.html) ============ */
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f4f6; --bg-grad: #eceef3;
+    --card: #ffffff;
+    --txt: #17181b;
+    --muted: #5c6470;
+    --line: #e3e5ea;
+    --accent: #3451d8;
+    --accent-fg: #ffffff;
+    --accent-soft: #e8ecfb;
+    --err-bg: #fdecec; --err-tx: #a01b12;
+    --st-red: #fbe4e2; --st-green: #dff2e4; --st-gray: #eceef2;
+    --chart2: #d97706;                /* вторая линия графика (CTR) */
+    --shadow: 0 1px 2px rgba(16,20,30,.05), 0 10px 30px rgba(16,20,30,.07);
+    --radius: 16px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --bg-grad: #12151b;
+      --card: #171a20;
+      --txt: #e9ebef;
+      --muted: #a2aab8;
+      --line: #272c35;
+      --accent: #7d95ff;
+      --accent-fg: #101216;
+      --accent-soft: #222a42;
+      --err-bg: #3a2224; --err-tx: #ff9d92;
+      --st-red: #38201f; --st-green: #172c1d; --st-gray: #22262e;
+      --chart2: #f0a24a;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: linear-gradient(180deg, var(--bg-grad) 0, var(--bg) 220px) fixed var(--bg);
+    color: var(--txt);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-wrap: break-word;
+  }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  /* ============ Экран пароля (контракт — как в index.html) ============ */
+  #lock {
+    min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+  }
+  .lock-card {
+    width: 100%; max-width: 380px;
+    background: var(--card);
+    border-radius: 22px;
+    padding: 36px 26px 30px;
+    box-shadow: var(--shadow);
+    text-align: center;
+  }
+  .lock-mark {
+    width: 64px; height: 64px; margin: 0 auto 18px;
+    border-radius: 18px;
+    background: var(--accent-soft);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; line-height: 1;
+  }
+  .lock-card h1 { font-size: 24px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -.01em; }
+  .lock-hint { margin: 0 0 24px; color: var(--muted); font-size: 15px; }
+  .pw-wrap { position: relative; }
+  #password {
+    width: 100%;
+    padding: 14px 52px 14px 14px;
+    font-size: 17px;
+    border: 1.5px solid var(--line);
+    border-radius: 13px;
+    background: var(--bg); color: inherit;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  #password:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .pw-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: 0; background: none; color: var(--muted);
+    font-size: 13px; font-weight: 600;
+    padding: 8px 10px; border-radius: 9px; cursor: pointer;
+    min-height: 40px;
+  }
+  .pw-eye:active { background: var(--accent-soft); }
+  #submit-btn {
+    width: 100%; margin-top: 14px;
+    padding: 14px 16px;
+    font-size: 17px; font-weight: 650; letter-spacing: .01em;
+    border: 0; border-radius: 13px;
+    background: var(--accent); color: var(--accent-fg);
+    cursor: pointer;
+    transition: transform .06s, opacity .15s;
+    min-height: 52px;
+  }
+  #submit-btn:active { transform: scale(.985); }
+  #submit-btn:disabled { opacity: .65; cursor: progress; }
+  #error {
+    display: none;
+    margin-top: 14px; padding: 11px 13px;
+    font-size: 15px; font-weight: 550; text-align: left;
+    background: var(--err-bg); color: var(--err-tx);
+    border-radius: 11px;
+  }
+  #error.show { display: block; }
+  .lock-foot {
+    margin: 22px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  #unlocking {
+    display: none;
+    position: fixed; inset: 0; z-index: 50;
+    background: var(--bg);
+    align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+    color: var(--muted); font-size: 15px;
+  }
+  #unlocking.show { display: flex; }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 3px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ Шапка ============ */
+  #app { display: none; }
+  #app.show { display: block; }
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 0;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-main {
+    max-width: 740px; margin: 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    min-height: 44px;
+  }
+  .topbar-title {
+    font-size: 18px; font-weight: 750; letter-spacing: -.01em;
+    margin: 0; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .topbar-date {
+    flex: 1 1 auto; min-width: 0;
+    color: var(--muted); font-size: 12.5px; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-align: right;
+  }
+  .btn-logout {
+    flex: 0 0 auto;
+    border: 1.5px solid var(--line); background: var(--card); color: var(--muted);
+    font-size: 13px; font-weight: 650;
+    padding: 8px 13px; border-radius: 10px; cursor: pointer;
+    min-height: 38px;
+  }
+  .btn-logout:active { background: var(--accent-soft); }
+
+  /* ============ Контент ============ */
+  #content {
+    max-width: 740px; margin: 0 auto;
+    padding: 18px 16px calc(48px + env(safe-area-inset-bottom));
+    display: none;
+  }
+  #content.show { display: block; }
+
+  /* --- строка-вывод (тренд) --- */
+  .trend {
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    border-radius: 13px;
+    padding: 13px 16px;
+    font-size: 15.5px; font-weight: 650; line-height: 1.45;
+    margin: 0 0 16px;
+  }
+  .trend .trend-sub { display: block; font-weight: 500; color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+
+  /* --- KPI-плашки --- */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin: 0 0 16px;
+  }
+  @media (min-width: 560px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+  .kpi {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 13px 14px 12px;
+    box-shadow: 0 1px 2px rgba(16,20,30,.04);
+    min-width: 0;
+  }
+  .kpi-label {
+    font-size: 12.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kpi-value {
+    font-size: 30px; font-weight: 800; letter-spacing: -.02em;
+    line-height: 1.15; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi-value.small { font-size: 24px; }
+  .kpi-sub {
+    font-size: 12.5px; color: var(--muted); margin-top: 3px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kpi-delta { font-weight: 700; }
+  .kpi-delta.up { color: #157a3c; }
+  .kpi-delta.down { color: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    .kpi-delta.up { color: #69d18f; }
+    .kpi-delta.down { color: #ff9d92; }
+  }
+
+  /* --- карточка графика --- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 15px 16px 13px;
+    margin: 0 0 16px;
+    box-shadow: 0 1px 2px rgba(16,20,30,.04);
+  }
+  .card h2 {
+    font-size: 15.5px; font-weight: 750; margin: 0 0 10px;
+    letter-spacing: -.005em;
+  }
+  .chart-wrap { position: relative; width: 100%; }
+  #chart { display: block; width: 100%; height: 270px; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 6px 16px;
+    font-size: 12.5px; color: var(--muted);
+    margin-top: 8px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .lg { width: 16px; height: 4px; border-radius: 2px; display: inline-block; }
+  .lg.bar { background: var(--accent); height: 10px; width: 8px; border-radius: 2px; }
+  .lg.l1 { background: var(--accent); }
+  .lg.l2 { background: var(--chart2); }
+  .lg.edit { background: none; border-left: 2px dashed var(--muted); height: 12px; width: 2px; border-radius: 0; }
+
+  /* --- таблица по дням --- */
+  .tw {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card);
+    margin-bottom: 16px;
+  }
+  .tw table { border-collapse: collapse; width: 100%; font-size: 15px; line-height: 1.45; }
+  .tw th, .tw td {
+    padding: 9px 12px;
+    text-align: right;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .tw th:first-child, .tw td:first-child { text-align: left; font-weight: 650; }
+  .tw tr:last-child td { border-bottom: 0; }
+  .tw th {
+    font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted);
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+  }
+  .tw tr.hl td { background: var(--accent-soft); }
+
+  .foot-nav {
+    text-align: center;
+    font-size: 15px;
+    padding-top: 4px;
+  }
+  .foot-nav a { color: var(--accent); font-weight: 650; text-underline-offset: 3px; }
+
+  /* ============ Десктоп ============ */
+  @media (min-width: 720px) {
+    body { font-size: 17.5px; }
+    .topbar { padding-left: 24px; padding-right: 24px; }
+    #content { padding: 26px 24px 72px; }
+    .lock-card { padding: 44px 36px 34px; }
+    .lock-card h1 { font-size: 27px; }
+    #chart { height: 320px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation-duration: .01s !important; }
+    .spinner { animation: spin 1.2s linear infinite !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ЭКРАН ПАРОЛЯ -->
+<div id="lock">
+  <form class="lock-card" id="lock-form" autocomplete="off">
+    <div class="lock-mark" aria-hidden="true">📈</div>
+    <h1>Статистика Авито</h1>
+    <p class="lock-hint">Введите пароль, чтобы открыть статистику.</p>
+    <div class="pw-wrap">
+      <input type="password" id="password" placeholder="Пароль"
+             aria-label="Пароль" autocomplete="current-password" required>
+      <button type="button" class="pw-eye" id="pw-eye" aria-label="Показать пароль">Показать</button>
+    </div>
+    <button type="submit" id="submit-btn">Открыть</button>
+    <div id="error" role="alert">Неверный пароль</div>
+    <p class="lock-foot">🔒&nbsp;Пароль запоминается только до закрытия вкладки</p>
+  </form>
+</div>
+
+<!-- ОВЕРЛЕЙ АВТО-ВХОДА ИЗ СЕССИИ -->
+<div id="unlocking" role="status" aria-live="polite">
+  <div class="spinner" aria-hidden="true"></div>
+  <div>Расшифровываю статистику…</div>
+</div>
+
+<!-- ДАШБОРД -->
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1 class="topbar-title"><span aria-hidden="true">📈</span>Статистика Авито</h1>
+      <div class="topbar-date" id="topbar-date"></div>
+      <button type="button" class="btn-logout" id="lock-again">Выйти</button>
+    </div>
+  </header>
+  <div id="content"></div>
+</div>
+
+<!-- ============ СЛОЙ UI: KPI, тренд, график (canvas), таблица ============ -->
+<script>
+window.AvitoUI = (function () {
+  'use strict';
+
+  var DAYS = 28;                       // окно графика
+  var els = null;
+
+  function fmt(n) { return Number(n).toLocaleString('ru-RU'); }
+  function pct(v, digits) {
+    if (v === null || v === undefined || !isFinite(v)) return '—';
+    return (v * 100).toFixed(digits === undefined ? 1 : digits).replace('.', ',') + '%';
+  }
+  function dayDiff(a, b) { // b - a в днях (YYYY-MM-DD)
+    return Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+  }
+  function addDays(d, n) {
+    var t = new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000);
+    return t.toISOString().slice(0, 10);
+  }
+  function ruDate(d) { // 2026-11-15 → 15.11
+    return d.slice(8, 10) + '.' + d.slice(5, 7);
+  }
+
+  // ---- агрегаты ----------------------------------------------------------
+  function sum(rows, key) {
+    var s = 0, any = false;
+    rows.forEach(function (r) {
+      if (r[key] !== null && r[key] !== undefined) { s += r[key]; any = true; }
+    });
+    return any ? s : null;
+  }
+  function rate(rows, numKey, denKey) {
+    var n = 0, d = 0;
+    rows.forEach(function (r) {
+      if (r[numKey] != null) n += r[numKey];
+      if (r[denKey] != null) d += r[denKey];
+    });
+    return d > 0 ? n / d : null;
+  }
+  function kpis(rows) {
+    var imp = sum(rows, 'impressions') || 0;
+    var vis = sum(rows, 'views') || 0;
+    var con = sum(rows, 'contacts') || 0;
+    var bkRows = rows.filter(function (r) { return r.bookings != null; });
+    var bk = bkRows.length ? sum(rows, 'bookings') : null;
+    return [
+      { label: 'Показы',      value: fmt(imp), raw: imp, type: 'count' },
+      { label: 'Просмотры',   value: fmt(vis), raw: vis, type: 'count' },
+      { label: 'CTR',         value: pct(vis && imp ? vis / imp : null), raw: imp ? vis / imp : null, type: 'rate' },
+      { label: 'Контакты',    value: fmt(con), raw: con, type: 'count' },
+      { label: 'Просмотр → контакт', value: pct(vis && con ? con / vis : null), raw: vis && con ? con / vis : null, type: 'rate' },
+      { label: 'Записи',      value: bk == null ? '—' : fmt(bk), raw: bk, type: 'count',
+        sub: bk == null ? 'нет данных' : null }
+    ];
+  }
+  // дельта: последние 7 дней к предыдущим (окно ≥3 дней)
+  function delta7(rows, kpi) {
+    if (rows.length < 6) return null;
+    var last = rows.slice(-7);
+    var prev = rows.slice(-14, -7);
+    if (prev.length < 3) return null;
+    function val(rs) {
+      if (kpi.type === 'rate') {
+        var nKey = kpi.label === 'CTR' ? 'views' : 'contacts';
+        var dKey = kpi.label === 'CTR' ? 'impressions' : 'views';
+        return rate(rs, nKey, dKey);
+      }
+      var s = sum(rs, kpi.label === 'Показы' ? 'impressions'
+                   : kpi.label === 'Просмотры' ? 'views'
+                   : kpi.label === 'Контакты' ? 'contacts' : 'bookings');
+      return s;
+    }
+    var a = val(prev), b = val(last);
+    if (a == null || b == null || !a) return null;
+    return (b - a) / a;
+  }
+
+  // ---- строка-вывод (тренд) ---------------------------------------------
+  function trendText(rows, edits) {
+    var first = rows[0], last = rows[rows.length - 1];
+    var parts = [];
+    function dir(key, name) {
+      var a = first[key], b = last[key];
+      if (!a && !a === 0) return;
+      if (!a) { parts.push(name + ': ' + b + ' в последний день'); return; }
+      var p = (b - a) / a;
+      var word = p > 0.1 ? 'растут' : p < -0.1 ? 'падают' : 'без изменений';
+      var sign = p > 0 ? '+' : '';
+      parts.push(name + ' ' + word + ': ' + a + ' → ' + b + ' (' + sign + Math.round(p * 100) + '%)');
+    }
+    dir('impressions', 'Показы');
+    dir('views', 'Просмотры');
+    var con = sum(rows, 'contacts');
+    if (con != null) parts.push('контактов за период: ' + con);
+    var txt = parts.join(' · ');
+    var sub = '';
+    if (edits && edits.length) {
+      sub = 'Правки карточки: ' + edits.map(ruDate).join(', ') +
+            ' (пунктир на графике — эффект «до/после»)';
+    }
+    return { main: txt, sub: sub };
+  }
+
+  // ---- график (чистый canvas, без библиотек) -----------------------------
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function sma7(rows, key) { // скользящая средняя 7 дней по подряд идущим строкам
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      if (i < 6) { out.push(null); continue; }
+      var s = 0;
+      for (var j = i - 6; j <= i; j++) s += rows[j][key] || 0;
+      out.push(s / 7);
+    }
+    return out;
+  }
+
+  function drawChart(rows, edits) {
+    var canvas = document.getElementById('chart');
+    if (!canvas) return;
+    var parent = canvas.parentNode;
+    var dpr = window.devicePixelRatio || 1;
+    var W = parent.clientWidth, H = canvas.clientHeight;
+    if (!W) return;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    var C = {
+      accent: cssVar('--accent') || '#3451d8',
+      chart2: cssVar('--chart2') || '#d97706',
+      muted: cssVar('--muted') || '#5c6470',
+      line: cssVar('--line') || '#e3e5ea',
+      card: cssVar('--card') || '#fff',
+      txt: cssVar('--txt') || '#17181b'
+    };
+
+    // окно: последние DAYS дней, заканчиваясь последней датой данных
+    var lastDate = rows[rows.length - 1].date;
+    var startDate = addDays(lastDate, -(DAYS - 1));
+    var firstDate = rows[0].date;
+    if (dayDiff(startDate, firstDate) > 0) startDate = firstDate;
+
+    var byDate = {};
+    rows.forEach(function (r) { byDate[r.date] = r; });
+    var ctrSma = sma7(rows, 'views');    // ниже — пересчёт в CTR
+    var p2cSma = sma7(rows, 'contacts');
+    var smaByDate = {};
+    rows.forEach(function (r, i) {
+      var ctr = null, p2c = null;
+      if (ctrSma[i] != null && r.impressions) {
+        // SMA7 просмотров ÷ SMA7 показов — честнее, чем среднее дневных CTR
+        var sImp = 0, sVis = 0, sCon = 0;
+        for (var j = i - 6; j <= i; j++) { sImp += rows[j].impressions || 0; sVis += rows[j].views || 0; sCon += rows[j].contacts || 0; }
+        ctr = sImp ? sVis / sImp : null;
+        p2c = sVis ? sCon / sVis : null;
+      }
+      smaByDate[r.date] = { ctr: ctr, p2c: p2c };
+    });
+
+    var padL = 46, padR = 46, padT = 18, padB = 30;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var nDays = dayDiff(startDate, lastDate) + 1;
+    var step = plotW / nDays;
+    var xOf = function (date) { return padL + (dayDiff(startDate, date) + 0.5) * step; };
+
+    // оси-значения
+    var maxViews = 1;
+    var date = startDate;
+    for (var i = 0; i < nDays; i++, date = addDays(date, 1)) {
+      var r = byDate[date];
+      if (r) maxViews = Math.max(maxViews, r.views || 0);
+    }
+    var maxRate = 0.05;
+    Object.keys(smaByDate).forEach(function (d) {
+      var s = smaByDate[d];
+      if (s.ctr != null) maxRate = Math.max(maxRate, s.ctr);
+      if (s.p2c != null) maxRate = Math.max(maxRate, s.p2c);
+    });
+    maxRate = Math.ceil(maxRate * 20) / 20;          // кратно 5 пп
+    if (maxRate <= 0) maxRate = 0.05;
+
+    var yV = function (v) { return padT + plotH - (v / maxViews) * plotH; };
+    var yR = function (v) { return padT + plotH - (v / maxRate) * plotH; };
+
+    ctx.font = '11px ' + (cssVar('--sans') || 'sans-serif');
+    ctx.textBaseline = 'middle';
+
+    // горизонтальная сетка + подписи слева (просмотры)
+    ctx.strokeStyle = C.line;
+    ctx.fillStyle = C.muted;
+    ctx.lineWidth = 1;
+    var ticks = 4;
+    for (var t = 0; t <= ticks; t++) {
+      var v = maxViews * t / ticks;
+      var y = Math.round(yV(v)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+      ctx.textAlign = 'right';
+      ctx.fillText(String(Math.round(v)), padL - 6, y);
+      // подписи справа (проценты)
+      ctx.textAlign = 'left';
+      ctx.fillText(pct(maxRate * t / ticks, 0), W - padR + 6, y);
+    }
+
+    // даты по оси X (каждые 4 дня)
+    ctx.textAlign = 'center';
+    date = startDate;
+    for (var i2 = 0; i2 < nDays; i2++, date = addDays(date, 1)) {
+      if (i2 % 4 === 0 || date === lastDate) {
+        ctx.fillText(ruDate(date), xOf(date), H - padB + 14);
+      }
+    }
+
+    // столбцы: просмотры
+    var bw = Math.max(3, Math.min(22, step * 0.62));
+    date = startDate;
+    for (var i3 = 0; i3 < nDays; i3++, date = addDays(date, 1)) {
+      var row = byDate[date];
+      if (!row || !row.views) continue;
+      var x = xOf(date) - bw / 2;
+      var y = yV(row.views);
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(x, y, bw, padT + plotH - y);
+      ctx.globalAlpha = 1;
+    }
+
+    // линии: CTR (SMA7) и просмотр→контакт (SMA7), правая ось
+    function drawLine(key, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      var started = false;
+      ctx.beginPath();
+      date = startDate;
+      for (var i = 0; i < nDays; i++, date = addDays(date, 1)) {
+        var s = smaByDate[date];
+        if (!s || s[key] == null) { started = false; continue; }
+        var x = xOf(date), y = yR(s[key]);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    drawLine('ctr', C.chart2);
+    drawLine('p2c', C.accent);
+
+    // пунктиры — даты правок
+    (edits || []).forEach(function (ed, idx) {
+      if (dayDiff(startDate, ed) < 0 || dayDiff(ed, lastDate) < 0) return;
+      var x = Math.round(xOf(ed)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = C.muted;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = C.muted;
+      ctx.textAlign = x > W - 90 ? 'right' : 'left';
+      ctx.fillText('правка ' + ruDate(ed), x + (x > W - 90 ? -4 : 4), padT + 8 + (idx % 2) * 13);
+    });
+  }
+
+  // ---- рендер ------------------------------------------------------------
+  function render(data) {
+    var rows = (data.rows || []).slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    var content = els.content;
+    content.innerHTML = '';
+
+    if (!rows.length) {
+      content.innerHTML = '<div class="card">Нет данных за период.</div>';
+      show();
+      return;
+    }
+
+    // 1) строка-вывод
+    var tr = trendText(rows, data.edits || []);
+    var trend = document.createElement('div');
+    trend.className = 'trend';
+    trend.textContent = 'Тренд: ' + tr.main;
+    if (tr.sub) {
+      var sub = document.createElement('span');
+      sub.className = 'trend-sub';
+      sub.textContent = tr.sub;
+      trend.appendChild(sub);
+    }
+    content.appendChild(trend);
+
+    // 2) 6 KPI-плашек
+    var grid = document.createElement('div');
+    grid.className = 'kpi-grid';
+    kpis(rows).forEach(function (k) {
+      var card = document.createElement('div');
+      card.className = 'kpi';
+      var lab = document.createElement('div');
+      lab.className = 'kpi-label';
+      lab.textContent = k.label;
+      var val = document.createElement('div');
+      val.className = 'kpi-value' + (k.value.length > 6 ? ' small' : '');
+      val.textContent = k.value;
+      var subEl = document.createElement('div');
+      subEl.className = 'kpi-sub';
+      if (k.sub) {
+        subEl.textContent = k.sub;
+      } else {
+        var d = delta7(rows, k);
+        var range = rows.length + ' дн.';
+        if (d == null) {
+          subEl.textContent = 'за период (' + range + ')';
+        } else {
+          subEl.innerHTML = 'за 7 дней · к прошлой нед. ';
+          var sp = document.createElement('span');
+          sp.className = 'kpi-delta ' + (d > 0.005 ? 'up' : d < -0.005 ? 'down' : '');
+          var sign = d > 0 ? '+' : '';
+          sp.textContent = sign + Math.round(d * 100) + '%';
+          subEl.appendChild(sp);
+        }
+      }
+      card.appendChild(lab); card.appendChild(val); card.appendChild(subEl);
+      grid.appendChild(card);
+    });
+    content.appendChild(grid);
+
+    // 3) график 28 дней
+    var chartCard = document.createElement('div');
+    chartCard.className = 'card';
+    chartCard.innerHTML =
+      '<h2>28 дней — просмотры (столбцы), CTR и «просмотр → контакт», SMA7</h2>' +
+      '<div class="chart-wrap"><canvas id="chart" role="img" aria-label="График статистики за 28 дней"></canvas></div>' +
+      '<div class="legend">' +
+      '<span><i class="lg bar"></i>просмотры</span>' +
+      '<span><i class="lg l2"></i>CTR (SMA7)</span>' +
+      '<span><i class="lg l1"></i>просмотр → контакт (SMA7)</span>' +
+      '<span><i class="lg edit"></i>даты правок</span>' +
+      '</div>';
+    content.appendChild(chartCard);
+
+    // 4) таблица по дням
+    var tw = document.createElement('div');
+    tw.className = 'tw';
+    tw.setAttribute('tabindex', '0');
+    tw.setAttribute('role', 'region');
+    tw.setAttribute('aria-label', 'Таблица по дням (прокручивается по горизонтали)');
+    var html = '<table><thead><tr>' +
+      '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>CTR</th>' +
+      '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th>' +
+      '</tr></thead><tbody>';
+    var editSet = {};
+    (data.edits || []).forEach(function (e) { editSet[e] = true; });
+    rows.slice().reverse().forEach(function (r) {
+      var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
+      var p2c = r.views ? (r.contacts || 0) / r.views : null;
+      html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
+        '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
+        '<td>' + fmt(r.impressions || 0) + '</td>' +
+        '<td>' + fmt(r.views || 0) + '</td>' +
+        '<td>' + pct(ctr) + '</td>' +
+        '<td>' + fmt(r.contacts || 0) + '</td>' +
+        '<td>' + pct(p2c) + '</td>' +
+        '<td>' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
+        '</tr>';
+    });
+    html += '</tbody></table>';
+    tw.innerHTML = html;
+    content.appendChild(tw);
+
+    // 5) навигация
+    var nav = document.createElement('div');
+    nav.className = 'foot-nav';
+    nav.innerHTML = '<a href="index.html">← План</a>';
+    content.appendChild(nav);
+
+    // шапка: обновлено
+    els.date.textContent = 'данные: ' + ruDate(rows[0].date) + ' — ' + ruDate(rows[rows.length - 1].date);
+
+    show();
+    // отрисовка и перерисовка при ресайзе
+    drawChart(rows, data.edits || []);
+    if (window.__avitoRO) window.__avitoRO.disconnect();
+    window.__avitoRO = new ResizeObserver(function () { drawChart(rows, data.edits || []); });
+    window.__avitoRO.observe(chartCard);
+  }
+
+  function show() {
+    els.lock.style.display = 'none';
+    els.unlocking.classList.remove('show');
+    els.app.classList.add('show');
+    els.content.classList.add('show');
+    window.scrollTo(0, 0);
+  }
+
+  function init(elements) { els = elements; }
+  return { init: init, render: render };
+})();
+</script>
+
+<!-- ============ СЛОЙ ДАННЫХ: шифрование (контракт — НЕ менять) ============ -->
+<script>
+(function () {
+  'use strict';
+
+  // ==== КОНТРАКТНЫЕ КОНСТАНТЫ (не менять) ====
+  var ENC_URL = 'data/avito.enc';
+  var PBKDF2_ITERATIONS = 200000;   // должно совпадать с tools/crypt.js
+  var SALT_LEN = 16, IV_LEN = 12, TAG_LEN = 16; // base64(salt‖iv‖ct+tag)
+
+  var form = document.getElementById('lock-form');
+  var passInput = document.getElementById('password');
+  var errorBox = document.getElementById('error');
+  var submitBtn = document.getElementById('submit-btn');
+  var contentEl = document.getElementById('content');
+  var appEl = document.getElementById('app');
+  var unlocking = document.getElementById('unlocking');
+
+  var els = {
+    content: contentEl,
+    date: document.getElementById('topbar-date'),
+    lock: document.getElementById('lock'),
+    unlocking: unlocking,
+    app: appEl
+  };
+  window.AvitoUI.init(els);
+
+  var SESSION_KEY = 'plan_pw_v1';   // тот же ключ, что у плана: переход по ссылке — авто-вход
+
+  var encryptedB64 = null;
+  var plainJson = null; // расшифрованный JSON — ТОЛЬКО в памяти страницы
+
+  function showError(msg) {
+    errorBox.textContent = msg || 'Неверный пароль';
+    errorBox.classList.add('show');
+  }
+  function hideError() { errorBox.classList.remove('show'); }
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64.replace(/\s+/g, ''));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // PBKDF2-SHA256 (200k) → AES-256-GCM decrypt. Бросает исключение при неверном пароле.
+  async function decrypt(b64, password) {
+    var raw = b64ToBytes(b64);
+    if (raw.length < SALT_LEN + IV_LEN + TAG_LEN) throw new Error('bad format');
+    var salt = raw.subarray(0, SALT_LEN);
+    var iv = raw.subarray(SALT_LEN, SALT_LEN + IV_LEN);
+    var ct = raw.subarray(SALT_LEN + IV_LEN);
+    var enc = new TextEncoder();
+    var baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    var key = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
+    return new TextDecoder('utf-8').decode(pt);
+  }
+
+  async function openAvito(password) {
+    if (encryptedB64 === null) {
+      var resp = await fetch(ENC_URL, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('load failed');
+      encryptedB64 = await resp.text();
+    }
+    var text = await decrypt(encryptedB64, password);
+    var data;
+    try { data = JSON.parse(text); } catch (e) { throw new Error('bad data'); }
+    plainJson = data;
+    window.AvitoUI.render(data);
+    passInput.value = '';
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    hideError();
+    var password = passInput.value;
+    if (!password) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Проверяю…';
+    try {
+      await openAvito(password);
+      try { sessionStorage.setItem(SESSION_KEY, password); } catch (err) {}
+    } catch (err) {
+      if (err && (err.message === 'load failed' || err.message === 'bad data')) {
+        showError('Не удалось загрузить данные. Попробуйте позже.');
+      } else {
+        showError('Неверный пароль');
+        passInput.select();
+        passInput.focus();
+      }
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Открыть';
+    }
+  });
+
+  document.getElementById('pw-eye').addEventListener('click', function () {
+    var isPw = passInput.type === 'password';
+    passInput.type = isPw ? 'text' : 'password';
+    this.textContent = isPw ? 'Скрыть' : 'Показать';
+    passInput.focus();
+  });
+
+  document.getElementById('lock-again').addEventListener('click', function () {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (err) {}
+    contentEl.innerHTML = '';
+    contentEl.classList.remove('show');
+    appEl.classList.remove('show');
+    document.getElementById('lock').style.display = '';
+    plainJson = null;
+    encryptedB64 = null;
+    passInput.value = '';
+    hideError();
+    window.scrollTo(0, 0);
+    passInput.focus();
+  });
+
+  // Авто-вход из сессии (вкладка ещё открыта — переход «План ⇄ Статистика»)
+  (async function restoreSession() {
+    var saved = null;
+    try { saved = sessionStorage.getItem(SESSION_KEY); } catch (err) {}
+    if (!saved) return;
+    unlocking.classList.add('show');
+    try {
+      await openAvito(saved);
+    } catch (err) {
+      try { sessionStorage.removeItem(SESSION_KEY); } catch (e2) {}
+      unlocking.classList.remove('show');
+      if (err && err.message === 'load failed') showError('Не удалось загрузить данные. Попробуйте позже.');
+    }
+  })();
+})();
+</script>
+</body>
+</html>
