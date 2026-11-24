@@ -680,6 +680,9 @@ window.PlanUI = (function () {
       await openPlan(password);
       // сессия: пароль в sessionStorage (только до закрытия вкладки); localStorage НЕЛЬЗЯ
       try { sessionStorage.setItem(SESSION_KEY, password); } catch (err) {}
+      // владелец хочет: после ввода пароля — сразу дашборд Авито
+      window.location.href = 'avito.html';
+      return;
     } catch (err) {
       // неверный пароль (auth fail) или не удалось загрузить шифротекст
       if (err && err.message === 'load failed') {
