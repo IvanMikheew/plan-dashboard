@@ -37,9 +37,16 @@ function Fail([string]$msg, [int]$code) {
   exit $code
 }
 
-# --- 1. Пароль только из окружения ------------------------------------------
+# --- 1. Пароль: из окружения, либо ввод скрытым текстом -----------------------
 if (-not $env:PLAN_PASSWORD) {
-  Fail 'PLAN_PASSWORD не задан. Задайте переменную окружения: $env:PLAN_PASSWORD = ''...'' (пароль не передаётся аргументом)' 2
+  Write-Host 'Введите пароль шифрования плана (ввод скрыт):'
+  $sec = Read-Host -AsSecureString 'Пароль'
+  $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+  try { $env:PLAN_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+if (-not $env:PLAN_PASSWORD) {
+  Fail 'Пароль пуст. Запустите скрипт заново и введите пароль.' 2
 }
 if (-not (Test-Path -LiteralPath $PlanPath)) {
   Fail "Файл плана не найден: $PlanPath" 3

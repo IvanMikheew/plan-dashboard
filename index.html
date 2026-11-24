@@ -2,8 +2,10 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1115">
 <title>План — доступ по паролю</title>
 
 <!--
@@ -27,52 +29,328 @@
 -->
 
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #f5f6f8; color: #1c1e21; line-height: 1.55;
+  /* ============ Токены: светлая / тёмная тема ============ */
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f4f6; --bg-grad: #eceef3;
+    --card: #ffffff;
+    --txt: #17181b;          /* на card: ~17:1 */
+    --muted: #5c6470;        /* на card: ~5.5:1, на bg: ~5:1 */
+    --line: #e3e5ea;
+    --accent: #3451d8;       /* белый текст на нём: ~6.5:1 */
+    --accent-fg: #ffffff;
+    --accent-soft: #e8ecfb;
+    --err-bg: #fdecec; --err-tx: #a01b12;   /* ~6:1 */
+    --st-red: #fbe4e2; --st-orange: #fdedda; --st-yellow: #faf1cf;
+    --st-green: #dff2e4; --st-blue: #e2e9fb; --st-gray: #eceef2;
+    --shadow: 0 1px 2px rgba(16,20,30,.05), 0 10px 30px rgba(16,20,30,.07);
+    --radius: 16px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
-  /* --- Экран с паролем (заглушка; дизайнер может переписать разметку/стили) --- */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --bg-grad: #12151b;
+      --card: #171a20;
+      --txt: #e9ebef;        /* на card: ~13:1 */
+      --muted: #a2aab8;      /* на card: ~7:1 */
+      --line: #272c35;
+      --accent: #7d95ff;     /* тёмный текст на нём: ~7:1 */
+      --accent-fg: #101216;
+      --accent-soft: #222a42;
+      --err-bg: #3a2224; --err-tx: #ff9d92;
+      --st-red: #38201f; --st-orange: #382a17; --st-yellow: #373113;
+      --st-green: #172c1d; --st-blue: #1c2440; --st-gray: #22262e;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: linear-gradient(180deg, var(--bg-grad) 0, var(--bg) 220px) fixed var(--bg);
+    color: var(--txt);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-wrap: break-word;
+  }
+  button { font-family: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  /* ============ Экран пароля ============ */
   #lock {
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    padding: 24px;
+    min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
   }
   .lock-card {
-    width: 100%; max-width: 380px; background: #fff; border: 1px solid #e2e4e8;
-    border-radius: 14px; padding: 32px 28px; box-shadow: 0 8px 30px rgba(0,0,0,.06);
+    width: 100%; max-width: 380px;
+    background: var(--card);
+    border-radius: 22px;
+    padding: 36px 26px 30px;
+    box-shadow: var(--shadow);
+    text-align: center;
   }
-  .lock-card h1 { font-size: 20px; margin: 0 0 6px; }
-  .lock-card p.hint { margin: 0 0 20px; color: #6b7280; font-size: 14px; }
-  .lock-card input[type=password] {
-    width: 100%; padding: 11px 13px; font-size: 16px; border: 1px solid #c9cdd4;
-    border-radius: 9px; outline: none; background: #fff; color: inherit;
+  .lock-mark {
+    width: 64px; height: 64px; margin: 0 auto 18px;
+    border-radius: 18px;
+    background: var(--accent-soft);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; line-height: 1;
   }
-  .lock-card input[type=password]:focus { border-color: #4f6ef7; box-shadow: 0 0 0 3px rgba(79,110,247,.15); }
-  .lock-card button {
-    width: 100%; margin-top: 12px; padding: 11px; font-size: 15px; font-weight: 600;
-    border: 0; border-radius: 9px; background: #4f6ef7; color: #fff; cursor: pointer;
+  .lock-card h1 { font-size: 24px; line-height: 1.25; margin: 0 0 8px; letter-spacing: -.01em; }
+  .lock-hint { margin: 0 0 24px; color: var(--muted); font-size: 15px; }
+  .pw-wrap { position: relative; }
+  #password {
+    width: 100%;
+    padding: 14px 52px 14px 14px;
+    font-size: 17px;
+    border: 1.5px solid var(--line);
+    border-radius: 13px;
+    background: var(--bg); color: inherit;
+    transition: border-color .15s, box-shadow .15s;
   }
-  .lock-card button:disabled { opacity: .6; cursor: wait; }
+  #password:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .pw-eye {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: 0; background: none; color: var(--muted);
+    font-size: 13px; font-weight: 600;
+    padding: 8px 10px; border-radius: 9px; cursor: pointer;
+    min-height: 40px;
+  }
+  .pw-eye:active { background: var(--accent-soft); }
+  #submit-btn {
+    width: 100%; margin-top: 14px;
+    padding: 14px 16px;
+    font-size: 17px; font-weight: 650; letter-spacing: .01em;
+    border: 0; border-radius: 13px;
+    background: var(--accent); color: var(--accent-fg);
+    cursor: pointer;
+    transition: transform .06s, opacity .15s;
+    min-height: 52px;
+  }
+  #submit-btn:active { transform: scale(.985); }
+  #submit-btn:disabled { opacity: .65; cursor: progress; }
   #error {
-    display: none; margin-top: 12px; padding: 9px 12px; font-size: 14px;
-    background: #fdecec; color: #b42318; border-radius: 8px;
+    display: none;
+    margin-top: 14px; padding: 11px 13px;
+    font-size: 15px; font-weight: 550; text-align: left;
+    background: var(--err-bg); color: var(--err-tx);
+    border-radius: 11px;
   }
   #error.show { display: block; }
-  /* --- Расшифрованный план --- */
-  #content { display: none; max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  .lock-foot {
+    margin: 22px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  /* оверлей «расшифровка» при авто-входе из сессии */
+  #unlocking {
+    display: none;
+    position: fixed; inset: 0; z-index: 50;
+    background: var(--bg);
+    align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+    color: var(--muted); font-size: 15px;
+  }
+  #unlocking.show { display: flex; }
+  .spinner {
+    width: 34px; height: 34px;
+    border: 3px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ Шапка дашборда ============ */
+  #app { display: none; }
+  #app.show { display: block; }
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 0;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-main {
+    max-width: 740px; margin: 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    min-height: 44px;
+  }
+  .topbar-title {
+    font-size: 18px; font-weight: 750; letter-spacing: -.01em;
+    margin: 0; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .topbar-date {
+    flex: 1 1 auto; min-width: 0;
+    color: var(--muted); font-size: 12.5px; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-align: right;
+  }
+  .btn-logout {
+    flex: 0 0 auto;
+    border: 1.5px solid var(--line); background: var(--card); color: var(--muted);
+    font-size: 13px; font-weight: 650;
+    padding: 8px 13px; border-radius: 10px; cursor: pointer;
+    min-height: 38px;
+  }
+  .btn-logout:active { background: var(--accent-soft); }
+  /* чипы-навигация по секциям */
+  .chips {
+    max-width: 740px; margin: 0 auto;
+    display: flex; gap: 8px;
+    padding: 10px 0 11px;
+    overflow-x: auto; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: 0 0 auto;
+    border: 1.5px solid var(--line); background: var(--card);
+    color: var(--txt);
+    font-size: 13.5px; font-weight: 650;
+    padding: 8px 13px; border-radius: 999px; cursor: pointer;
+    white-space: nowrap;
+    min-height: 38px;
+  }
+  .chip:active { background: var(--accent-soft); }
+
+  /* ============ Контент плана ============ */
+  #content {
+    max-width: 740px; margin: 0 auto;
+    padding: 18px 16px calc(48px + env(safe-area-inset-bottom));
+    display: none;
+  }
   #content.show { display: block; }
-  #content h1 { font-size: 26px; margin-top: 0; }
-  #content h2 { font-size: 20px; margin-top: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
-  #content code { background: #eef0f3; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
-  #content pre { background: #eef0f3; padding: 12px; border-radius: 8px; overflow-x: auto; }
-  #content blockquote { border-left: 3px solid #c9cdd4; margin: 12px 0; padding: 2px 14px; color: #555; }
-  #content table { border-collapse: collapse; } #content td, #content th { border: 1px solid #ddd; padding: 6px 10px; }
-  .toolbar { max-width: 860px; margin: 0 auto; padding: 12px 20px 0; display: none; }
-  .toolbar.show { display: block; }
-  .toolbar button {
-    font-size: 13px; padding: 6px 12px; border: 1px solid #c9cdd4; background: #fff;
-    color: #444; border-radius: 8px; cursor: pointer;
+  #content > *:first-child { margin-top: 0; }
+
+  .updated-note {
+    color: var(--muted); font-size: 13px;
+    margin: 0 0 18px;
+    display: none;
+  }
+
+  /* --- секции-аккордеон --- */
+  .sec { margin: 0 0 14px; scroll-margin-top: 128px; }
+  .sec-h { margin: 0; }
+  .sec-btn {
+    width: 100%;
+    display: flex; align-items: center; gap: 10px;
+    text-align: left;
+    padding: 15px 16px;
+    font-size: 17.5px; font-weight: 750; letter-spacing: -.005em;
+    color: var(--txt);
+    background: var(--card);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(16,20,30,.04);
+  }
+  .sec-btn:active { background: var(--accent-soft); }
+  .sec-t { flex: 1 1 auto; min-width: 0; }
+  .chev {
+    flex: 0 0 auto;
+    color: var(--muted); font-size: 15px;
+    transition: transform .2s ease;
+  }
+  .sec.open > .sec-h .chev { transform: rotate(90deg); }
+  .sec-body {
+    display: none;
+    padding: 16px 2px 6px;
+  }
+  .sec.open .sec-body { display: block; }
+  /* акцентная секция («Сегодня») */
+  .sec.hot > .sec-h .sec-btn {
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+    box-shadow: 0 1px 2px rgba(16,20,30,.05), 0 8px 22px rgba(52,81,216,.10);
+  }
+
+  /* --- типографика контента --- */
+  #content p, #content ul, #content ol { margin: 0 0 14px; }
+  #content ul, #content ol { padding-left: 22px; }
+  #content li { margin: 6px 0; }
+  #content li::marker { color: var(--muted); }
+  #content strong { font-weight: 750; }
+  #content h3 { font-size: 16.5px; font-weight: 750; margin: 22px 0 8px; }
+  #content a { color: var(--accent); text-underline-offset: 3px; }
+  #content code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--accent-soft); padding: 1px 6px; border-radius: 6px;
+  }
+  #content pre {
+    background: var(--card); border: 1px solid var(--line);
+    padding: 14px; border-radius: 12px; overflow-x: auto;
+  }
+  #content pre code { background: none; padding: 0; }
+  #content blockquote {
+    margin: 14px 0; padding: 12px 16px;
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 12px 12px 0;
+    color: var(--txt);
+  }
+  #content blockquote p:last-child { margin-bottom: 0; }
+
+  /* --- таблицы: горизонтальный скролл на телефоне --- */
+  .tw {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    margin: 0 0 16px;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card);
+  }
+  .tw table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 15px; line-height: 1.45;
+  }
+  .tw th, .tw td {
+    padding: 10px 13px;
+    text-align: left;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    overflow-wrap: anywhere;   /* длинные URL/пути не расширяют таблицу */
+  }
+  .tw tr:last-child td { border-bottom: 0; }
+  .tw th {
+    font-size: 12.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted);
+    white-space: nowrap;
+    background: color-mix(in srgb, var(--bg) 55%, var(--card));
+  }
+  .tw td:first-child { font-weight: 650; white-space: nowrap; }
+
+  /* --- статусные плашки в ячейках/абзацах --- */
+  .st-red    { background: var(--st-red); }
+  .st-orange { background: var(--st-orange); }
+  .st-yellow { background: var(--st-yellow); }
+  .st-green  { background: var(--st-green); }
+  .st-blue   { background: var(--st-blue); }
+  .st-gray   { background: var(--st-gray); }
+  td[class*="st-"], p[class*="st-"] {
+    border-radius: 9px;
+    font-weight: 600;
+  }
+  td[class*="st-"] { padding: 8px 12px; white-space: nowrap; }
+  .tw .col-st { width: 1%; white-space: nowrap; font-size: 13.5px; padding: 8px 10px; }
+
+  /* ============ Десктоп ============ */
+  @media (min-width: 720px) {
+    body { font-size: 17.5px; }
+    .topbar { padding-left: 24px; padding-right: 24px; }
+    #content { padding: 26px 24px 72px; }
+    .sec-btn { font-size: 19px; padding: 17px 20px; }
+    .sec-body { padding: 18px 6px 8px; }
+    .tw table { font-size: 15.5px; }
+    .lock-card { padding: 44px 36px 34px; }
+    .lock-card h1 { font-size: 27px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation-duration: .01s !important; }
+    .spinner { animation: spin 1.2s linear infinite !important; }
   }
 </style>
 </head>
@@ -81,20 +359,225 @@
 <!-- ЭКРАН ПАРОЛЯ -->
 <div id="lock">
   <form class="lock-card" id="lock-form" autocomplete="off">
+    <div class="lock-mark" aria-hidden="true">📋</div>
     <h1>План</h1>
-    <p class="hint">Введите пароль, чтобы открыть план.</p>
-    <input type="password" id="password" placeholder="Пароль" autocomplete="current-password" required>
+    <p class="lock-hint">Введите пароль, чтобы открыть план.</p>
+    <div class="pw-wrap">
+      <input type="password" id="password" placeholder="Пароль"
+             aria-label="Пароль" autocomplete="current-password" required>
+      <button type="button" class="pw-eye" id="pw-eye" aria-label="Показать пароль">Показать</button>
+    </div>
     <button type="submit" id="submit-btn">Открыть</button>
     <div id="error" role="alert">Неверный пароль</div>
+    <p class="lock-foot">🔒&nbsp;Пароль запоминается только до закрытия вкладки</p>
   </form>
 </div>
 
-<!-- ПАНЕЛЬ (необязательная; дизайнер может удалить) -->
-<div class="toolbar" id="toolbar"><button type="button" id="lock-again">Скрыть план</button></div>
+<!-- ОВЕРЛЕЙ АВТО-ВХОДА ИЗ СЕССИИ -->
+<div id="unlocking" role="status" aria-live="polite">
+  <div class="spinner" aria-hidden="true"></div>
+  <div>Расшифровываю план…</div>
+</div>
 
-<!-- РАСШИФРОВАННЫЙ PLAN (контракт: markdown рендерится сюда) -->
-<div id="content"></div>
+<!-- ДАШБОРД -->
+<div id="app">
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1 class="topbar-title"><span aria-hidden="true">📋</span>План</h1>
+      <div class="topbar-date" id="topbar-date"></div>
+      <button type="button" class="btn-logout" id="lock-again">Выйти</button>
+    </div>
+    <nav class="chips" id="chips" aria-label="Секции плана"></nav>
+  </header>
+  <!-- РАСШИФРОВАННЫЙ PLAN (контракт: markdown рендерится сюда) -->
+  <div id="content"></div>
+</div>
 
+<!-- ============ СЛОЙ UI: рендер markdown → секции/таблицы/статусы ============ -->
+<script>
+window.PlanUI = (function () {
+  'use strict';
+
+  // Эмодзи-статусы → цветовые классы плашек
+  var STATUS = [
+    ['🔴', 'st-red'], ['❌', 'st-red'],
+    ['🟠', 'st-orange'], ['⚠️', 'st-orange'],
+    ['🟡', 'st-yellow'], ['⭐', 'st-yellow'],
+    ['✅', 'st-green'], ['🟢', 'st-green'], ['👍', 'st-green'],
+    ['🔄', 'st-blue'], ['🔵', 'st-blue'], ['🚀', 'st-blue'],
+    ['⏳', 'st-gray'], ['⚪', 'st-gray'], ['⏸', 'st-gray']
+  ];
+
+  function statusClass(text) {
+    var t = text.trim();
+    for (var i = 0; i < STATUS.length; i++) {
+      if (t.indexOf(STATUS[i][0]) === 0) return STATUS[i][1];
+    }
+    return null;
+  }
+
+  function buildSections(root) {
+    var kids = Array.prototype.slice.call(root.children);
+    var updatedText = null;
+
+    // 1) вынимаем из контента: h1 (заголовок уже в шапке), hr, строку «обновление»
+    kids = kids.filter(function (el) {
+      if (el.tagName === 'H1' || el.tagName === 'HR') { el.remove(); return false; }
+      if (el.tagName === 'P' && /Последнее обновление/.test(el.textContent)) {
+        var m = el.textContent.match(/Последнее обновление:\s*([^_]+)/);
+        if (m) updatedText = m[1].trim();
+        el.remove();
+        return false;
+      }
+      return true;
+    });
+
+    // 2) собираем секции по h2
+    var frag = document.createDocumentFragment();
+    var current = null, n = 0;
+    kids.forEach(function (el) {
+      if (el.tagName === 'H2') {
+        n++;
+        var id = 'sec-' + n;
+        var sec = document.createElement('section');
+        sec.className = 'sec' + (n === 1 ? ' hot open' : '');
+        sec.id = id;
+
+        var h2 = document.createElement('h2');
+        h2.className = 'sec-h';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sec-btn';
+        btn.setAttribute('aria-expanded', n === 1 ? 'true' : 'false');
+        btn.setAttribute('aria-controls', id + '-b');
+        btn.innerHTML = '<span class="chev" aria-hidden="true">›</span>' +
+                        '<span class="sec-t"></span>';
+        btn.querySelector('.sec-t').textContent = el.textContent;
+        h2.appendChild(btn);
+
+        var body = document.createElement('div');
+        body.className = 'sec-body';
+        body.id = id + '-b';
+
+        sec.appendChild(h2);
+        sec.appendChild(body);
+        frag.appendChild(sec);
+        current = { sec: sec, btn: btn, body: body };
+        el.remove();
+      } else if (current) {
+        current.body.appendChild(el);
+      }
+      // контент до первого h2 (не должен остаться — строки вынуты выше)
+    });
+    root.appendChild(frag);
+
+    // 3) клики по секциям
+    root.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('.sec-btn') : null;
+      if (!btn || !root.contains(btn)) return;
+      var sec = btn.closest('.sec');
+      var open = sec.classList.toggle('open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    return { count: n, updatedText: updatedText };
+  }
+
+  function decorate(root) {
+    // таблицы → горизонтальный скролл
+    Array.prototype.forEach.call(root.querySelectorAll('table'), function (tbl) {
+      if (tbl.parentNode.classList && tbl.parentNode.classList.contains('tw')) return;
+      var wrap = document.createElement('div');
+      wrap.className = 'tw';
+      wrap.setAttribute('tabindex', '0');   // скролл с клавиатуры (a11y)
+      wrap.setAttribute('role', 'region');
+      wrap.setAttribute('aria-label', 'Таблица (прокручивается по горизонтали)');
+      tbl.parentNode.insertBefore(wrap, tbl);
+      wrap.appendChild(tbl);
+    });
+
+    // статусные плашки в ячейках и абзацах
+    Array.prototype.forEach.call(root.querySelectorAll('td, p'), function (el) {
+      if (el.querySelector('*')) return;      // только простой текст
+      var cls = statusClass(el.textContent);
+      if (cls) el.classList.add(cls);
+    });
+
+    // колонка со статусом — по ширине плашки, не отнимает место у текста
+    Array.prototype.forEach.call(root.querySelectorAll('table'), function (tbl) {
+      var stIndex = -1;
+      Array.prototype.forEach.call(tbl.querySelectorAll('td'), function (td) {
+        if (stIndex < 0 && /(^|\s)st-/.test(td.className)) stIndex = td.cellIndex;
+      });
+      if (stIndex < 0) return;
+      Array.prototype.forEach.call(tbl.rows, function (row) {
+        if (row.cells[stIndex]) row.cells[stIndex].classList.add('col-st');
+      });
+    });
+  }
+
+  function buildChips(root, chipBar) {
+    chipBar.innerHTML = '';
+    var secs = root.querySelectorAll('.sec');
+    if (secs.length < 2) { chipBar.style.display = 'none'; return; }
+    Array.prototype.forEach.call(secs, function (sec) {
+      var title = sec.querySelector('.sec-t').textContent.trim();
+      // короткое имя: убираем скобочную часть и эмодзи, максимум 2 слова
+      // («СЕГОДНЯ (24.11, вторник)» → «СЕГОДНЯ», «ОТКРЫТЫЕ ВОПРОСЫ (…)» → «ОТКРЫТЫЕ ВОПРОСЫ»)
+      var words = title.replace(/\([^)]*\)/g, ' ').replace(/[^\p{L}\s]/gu, ' ').trim().split(/\s+/);
+      var short = words.slice(0, 2).join(' ');
+      if (short.length > 16) short = words[0];
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.textContent = short;
+      chip.addEventListener('click', function () {
+        if (!sec.classList.contains('open')) {
+          sec.classList.add('open');
+          sec.querySelector('.sec-btn').setAttribute('aria-expanded', 'true');
+        }
+        sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      chipBar.appendChild(chip);
+    });
+  }
+
+  function render(md, els) {
+    // md → DOM (marked или сырой текст)
+    var contentEl = els.content;
+    if (window.marked && window.marked.parse) {
+      contentEl.innerHTML = window.marked.parse(md);
+    } else {
+      contentEl.innerHTML = '';
+      var pre = document.createElement('pre');
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.textContent = md;
+      contentEl.appendChild(pre);
+    }
+    var info = buildSections(contentEl);
+    decorate(contentEl);
+    buildChips(contentEl, els.chips);
+
+    if (info.updatedText) {
+      els.date.textContent = 'обновлено: ' + info.updatedText;
+      els.date.title = 'Последнее обновление: ' + info.updatedText;
+    } else {
+      els.date.textContent = '';
+    }
+
+    // показ дашборда
+    els.lock.style.display = 'none';
+    els.unlocking.classList.remove('show');
+    els.app.classList.add('show');
+    contentEl.classList.add('show');
+    window.scrollTo(0, 0);
+  }
+
+  return { render: render };
+})();
+</script>
+
+<!-- ============ СЛОЙ ДАННЫХ: шифрование (контракт — не менять) ============ -->
 <script>
 (function () {
   'use strict';
@@ -109,7 +592,19 @@
   var errorBox = document.getElementById('error');
   var submitBtn = document.getElementById('submit-btn');
   var contentEl = document.getElementById('content');
-  var toolbar = document.getElementById('toolbar');
+  var appEl = document.getElementById('app');
+  var unlocking = document.getElementById('unlocking');
+
+  var els = {
+    content: contentEl,
+    chips: document.getElementById('chips'),
+    date: document.getElementById('topbar-date'),
+    lock: document.getElementById('lock'),
+    unlocking: unlocking,
+    app: appEl
+  };
+
+  var SESSION_KEY = 'plan_pw_v1';   // sessionStorage: очищается при закрытии вкладки
 
   var encryptedB64 = null;  // текст data/plan.enc (публичный, шифротекст)
   var plainMarkdown = null; // расшифрованный текст — ТОЛЬКО в памяти страницы
@@ -146,18 +641,6 @@
   }
 
   // Ленивая загрузка marked (CDN); при недоступности — сырой текст.
-  function renderMarkdown(md) {
-    if (window.marked && window.marked.parse) {
-      contentEl.innerHTML = window.marked.parse(md);
-      return;
-    }
-    contentEl.innerHTML = '';
-    var pre = document.createElement('pre');
-    pre.style.whiteSpace = 'pre-wrap';
-    pre.textContent = md; // безопасно: текст, не HTML
-    contentEl.appendChild(pre);
-  }
-
   async function loadMarked() {
     if (window.marked) return true;
     if (markedReady) return markedReady;
@@ -180,12 +663,8 @@
     var md = await decrypt(encryptedB64, password); // при неверном пароле — исключение
     plainMarkdown = md;                             // в памяти; никуда не сохраняем
     await loadMarked();
-    renderMarkdown(md);
-    contentEl.classList.add('show');
-    toolbar.classList.add('show');
-    document.getElementById('lock').style.display = 'none';
+    window.PlanUI.render(md, els);
     passInput.value = '';   // пароль из памяти убираем сразу
-    window.scrollTo(0, 0);
   }
 
   form.addEventListener('submit', async function (e) {
@@ -197,6 +676,8 @@
     submitBtn.textContent = 'Проверяю…';
     try {
       await openPlan(password);
+      // сессия: пароль в sessionStorage (только до закрытия вкладки); localStorage НЕЛЬЗЯ
+      try { sessionStorage.setItem(SESSION_KEY, password); } catch (err) {}
     } catch (err) {
       // неверный пароль (auth fail) или не удалось загрузить шифротекст
       if (err && err.message === 'load failed') {
@@ -212,17 +693,43 @@
     }
   });
 
+  // Показ/скрытие пароля
+  document.getElementById('pw-eye').addEventListener('click', function () {
+    var isPw = passInput.type === 'password';
+    passInput.type = isPw ? 'text' : 'password';
+    this.textContent = isPw ? 'Скрыть' : 'Показать';
+    passInput.focus();
+  });
+
+  // Выход: очищаем сессию и память страницы, возвращаемся на пароль-экран
   document.getElementById('lock-again').addEventListener('click', function () {
-    // Скрываем контент из DOM; расшифрованный текст остаётся только в переменной до перезагрузки.
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (err) {}
     contentEl.innerHTML = '';
     contentEl.classList.remove('show');
-    toolbar.classList.remove('show');
+    appEl.classList.remove('show');
     document.getElementById('lock').style.display = '';
     plainMarkdown = null;
     encryptedB64 = null;
     passInput.value = '';
+    hideError();
+    window.scrollTo(0, 0);
     passInput.focus();
   });
+
+  // Авто-вход из сессии (вкладка ещё открыта)
+  (async function restoreSession() {
+    var saved = null;
+    try { saved = sessionStorage.getItem(SESSION_KEY); } catch (err) {}
+    if (!saved) return;
+    unlocking.classList.add('show');
+    try {
+      await openPlan(saved);
+    } catch (err) {
+      try { sessionStorage.removeItem(SESSION_KEY); } catch (e2) {}
+      unlocking.classList.remove('show');
+      if (err && err.message === 'load failed') showError('Не удалось загрузить данные. Попробуйте позже.');
+    }
+  })();
 })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js" defer></script>
