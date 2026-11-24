@@ -3,11 +3,16 @@
   sync_avito.ps1 — шифрует CSV статистики Авито в data/avito.enc и коммитит его в GitHub-репо.
 
 .DESCRIPTION
-  1. Читает CSV статистики (дата,объявление_id,показы,просмотры,контакты,записи,источник).
-  2. Превращает в JSON {updated, rows[], edits[]} (edits — даты правок из журнала изменений).
-  3. Шифрует через tools/crypt.js (AES-256-GCM, PBKDF2-SHA256 200k,
+  1. Шаг calendar_stats.ps1: свежие колонки записей из Google Calendar (ICS из
+     .env CALENDAR_ICS_URL) → колонки запись_старые/записи_новые в CSV.
+     Неблокирующий: ошибка календаря не прерывает заливку (WARN).
+  2. Читает CSV статистики (дата,объявление_id,показы,просмотры,контакты,записи,
+     запись_старые,записи_новые,источник).
+  3. Превращает в JSON {updated, rows[], edits[]} (edits — даты правок из журнала
+     изменений; rows — bookings, bookingsOld, bookingsNew).
+  4. Шифрует через tools/crypt.js (AES-256-GCM, PBKDF2-SHA256 200k,
      формат base64(salt‖iv‖ct)) — ТОТ ЖЕ пароль и формат, что у плана.
-  4. Коммитит data/avito.enc в репозиторий через GitHub REST API (PUT /contents).
+  5. Коммитит data/avito.enc в репозиторий через GitHub REST API (PUT /contents).
 
   ПАРОЛЬ — только из переменной окружения PLAN_PASSWORD (не аргумент, не файл, не лог).
   Пример запуска (PowerShell):
@@ -66,6 +71,19 @@ if (-not $token) {
 }
 if (-not $token) { Fail 'GITHUB_TOKEN пуст' 4 }
 
+# --- 2.5 Шаг calendar: обновить колонки записей из Google Calendar ----------
+# Неблокирующий: календарь недоступен → WARN и заливка идёт по текущему CSV.
+$calScript = Join-Path $PSScriptRoot 'calendar_stats.ps1'
+if (Test-Path -LiteralPath $calScript) {
+  Write-Host 'calendar: обновляю колонки записей из Google Calendar…'
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $calScript -CsvPath $CsvPath
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARN: calendar_stats завершился с кодом $LASTEXITCODE — колонки записей не обновлены" -ForegroundColor Yellow
+  }
+} else {
+  Write-Host "WARN: calendar_stats.ps1 не найден ($calScript) — пропускаю" -ForegroundColor Yellow
+}
+
 # --- 3. CSV -> JSON ---------------------------------------------------------
 $rows = @(Import-Csv -LiteralPath $CsvPath -Encoding UTF8)
 if ($rows.Count -eq 0) { Fail 'CSV пуст' 3 }
@@ -74,6 +92,10 @@ $outRows = @()
 foreach ($r in $rows) {
   $bk = $null
   if ($r.записи -ne $null -and "$($r.записи)".Trim() -ne '') { $bk = [int]$r.записи }
+  $bkOld = $null
+  if ($r.PSObject.Properties['записи_старые'] -and "$($r.записи_старые)".Trim() -ne '') { $bkOld = [int]$r.записи_старые }
+  $bkNew = $null
+  if ($r.PSObject.Properties['записи_новые'] -and "$($r.записи_новые)".Trim() -ne '') { $bkNew = [int]$r.записи_новые }
   $outRows += [ordered]@{
     date        = "$($r.дата)".Trim()
     item        = "$($r.объявление_id)".Trim()
@@ -81,6 +103,8 @@ foreach ($r in $rows) {
     views       = [int]$r.просмотры
     contacts    = [int]$r.контакты
     bookings    = $bk
+    bookingsOld = $bkOld
+    bookingsNew = $bkNew
     source      = "$($r.источник)".Trim()
   }
 }

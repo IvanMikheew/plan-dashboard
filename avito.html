@@ -19,9 +19,11 @@
      (тот же ключ 'plan_pw_v1', что и у плана: переход по ссылке — авто-вход).
   3) Расшифрованный текст = JSON:
      { updated: "ГГГГ-ММ-ДД",
-       rows: [ {date, item, impressions, views, contacts, bookings, source} ],
+       rows: [ {date, item, impressions, views, contacts,
+                 bookings, bookingsOld, bookingsNew, source} ],
        edits: ["ГГГГ-ММ-ДД", ...] }   // даты правок из журнала изменений
-     bookings: null = данных нет.
+     bookings: null = данных нет. bookingsOld/bookingsNew — записи от старых/новых
+      клиентов по пометкам в Google Calendar (null = данных нет).
   4) Ошибка GCM tag → «Неверный пароль»; нет файла → «Не удалось загрузить».
   ==========================================================================
 -->
@@ -412,6 +414,8 @@ window.AvitoUI = (function () {
     var con = sum(rows, 'contacts') || 0;
     var bkRows = rows.filter(function (r) { return r.bookings != null; });
     var bk = bkRows.length ? sum(rows, 'bookings') : null;
+    var bkw = sum(rows, 'bookingsNew');   // записи от новых клиентов (календарь)
+    var bko = sum(rows, 'bookingsOld');   // записи от старых клиентов (календарь)
     return [
       { label: 'Показы',      value: fmt(imp), raw: imp, type: 'count' },
       { label: 'Просмотры',   value: fmt(vis), raw: vis, type: 'count' },
@@ -419,7 +423,11 @@ window.AvitoUI = (function () {
       { label: 'Контакты',    value: fmt(con), raw: con, type: 'count' },
       { label: 'Просмотр → контакт', value: pct(vis && con ? con / vis : null), raw: vis && con ? con / vis : null, type: 'rate' },
       { label: 'Записи',      value: bk == null ? '—' : fmt(bk), raw: bk, type: 'count',
-        sub: bk == null ? 'нет данных' : null }
+        sub: bk == null ? 'нет данных' : null },
+      { label: 'Записи новые', value: bkw == null ? '—' : fmt(bkw), raw: bkw, type: 'count',
+        sub: 'за период' },
+      { label: 'Записи старые', value: bko == null ? '—' : fmt(bko), raw: bko, type: 'count',
+        sub: 'за период' }
     ];
   }
   // дельта: последние 7 дней к предыдущим (окно ≥3 дней)
@@ -716,6 +724,7 @@ window.AvitoUI = (function () {
     var html = '<table><thead><tr>' +
       '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>CTR</th>' +
       '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th>' +
+      '<th>Записи старые</th><th>Записи новые</th>' +
       '</tr></thead><tbody>';
     var editSet = {};
     (data.edits || []).forEach(function (e) { editSet[e] = true; });
@@ -730,6 +739,8 @@ window.AvitoUI = (function () {
         '<td>' + fmt(r.contacts || 0) + '</td>' +
         '<td>' + pct(p2c) + '</td>' +
         '<td>' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
+        '<td>' + (r.bookingsOld == null ? '—' : fmt(r.bookingsOld)) + '</td>' +
+        '<td>' + (r.bookingsNew == null ? '—' : fmt(r.bookingsNew)) + '</td>' +
         '</tr>';
     });
     html += '</tbody></table>';
