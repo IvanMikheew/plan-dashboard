@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>План — доступ по паролю</title>
+
+<!--
+  ==========================================================================
+  КОНТРАКТ С ДИЗАЙНЕРОМ (данные НЕ менять; UI менять можно):
+  --------------------------------------------------------------------------
+  1) Источник данных: fetch('data/plan.enc') → текст = base64.
+     base64 декодируется в байты: raw = base64(salt‖iv‖ct) =
+       salt  — 16 байт,
+       iv    — 12 байт,
+       ct    — AES-256-GCM шифртекст + 16 байт auth-tag (в конце).
+  2) Ключ: PBKDF2-HMAC-SHA256(password, salt, 200000 итераций, 32 байта)
+     → AES-256-GCM decrypt({name:'AES-GCM', iv}, key, ct).
+     Пароль — только из поля ввода пользователя. Нигде не хранить
+     (не localStorage, не cookie, не URL). Расшифрованный текст —
+     максимум в памяти страницы (можно sessionStorage с автоочисткой
+     при закрытии вкладки; localStorage — нельзя).
+  3) Расшифрованный markdown (UTF-8) рендерится в <div id="content">.
+  4) Ошибка аутентификации (GCM tag mismatch) → сообщение «Неверный пароль».
+  ==========================================================================
+-->
+
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f5f6f8; color: #1c1e21; line-height: 1.55;
+  }
+  /* --- Экран с паролем (заглушка; дизайнер может переписать разметку/стили) --- */
+  #lock {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .lock-card {
+    width: 100%; max-width: 380px; background: #fff; border: 1px solid #e2e4e8;
+    border-radius: 14px; padding: 32px 28px; box-shadow: 0 8px 30px rgba(0,0,0,.06);
+  }
+  .lock-card h1 { font-size: 20px; margin: 0 0 6px; }
+  .lock-card p.hint { margin: 0 0 20px; color: #6b7280; font-size: 14px; }
+  .lock-card input[type=password] {
+    width: 100%; padding: 11px 13px; font-size: 16px; border: 1px solid #c9cdd4;
+    border-radius: 9px; outline: none; background: #fff; color: inherit;
+  }
+  .lock-card input[type=password]:focus { border-color: #4f6ef7; box-shadow: 0 0 0 3px rgba(79,110,247,.15); }
+  .lock-card button {
+    width: 100%; margin-top: 12px; padding: 11px; font-size: 15px; font-weight: 600;
+    border: 0; border-radius: 9px; background: #4f6ef7; color: #fff; cursor: pointer;
+  }
+  .lock-card button:disabled { opacity: .6; cursor: wait; }
+  #error {
+    display: none; margin-top: 12px; padding: 9px 12px; font-size: 14px;
+    background: #fdecec; color: #b42318; border-radius: 8px;
+  }
+  #error.show { display: block; }
+  /* --- Расшифрованный план --- */
+  #content { display: none; max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  #content.show { display: block; }
+  #content h1 { font-size: 26px; margin-top: 0; }
+  #content h2 { font-size: 20px; margin-top: 28px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+  #content code { background: #eef0f3; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  #content pre { background: #eef0f3; padding: 12px; border-radius: 8px; overflow-x: auto; }
+  #content blockquote { border-left: 3px solid #c9cdd4; margin: 12px 0; padding: 2px 14px; color: #555; }
+  #content table { border-collapse: collapse; } #content td, #content th { border: 1px solid #ddd; padding: 6px 10px; }
+  .toolbar { max-width: 860px; margin: 0 auto; padding: 12px 20px 0; display: none; }
+  .toolbar.show { display: block; }
+  .toolbar button {
+    font-size: 13px; padding: 6px 12px; border: 1px solid #c9cdd4; background: #fff;
+    color: #444; border-radius: 8px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- ЭКРАН ПАРОЛЯ -->
+<div id="lock">
+  <form class="lock-card" id="lock-form" autocomplete="off">
+    <h1>План</h1>
+    <p class="hint">Введите пароль, чтобы открыть план.</p>
+    <input type="password" id="password" placeholder="Пароль" autocomplete="current-password" required>
+    <button type="submit" id="submit-btn">Открыть</button>
+    <div id="error" role="alert">Неверный пароль</div>
+  </form>
+</div>
+
+<!-- ПАНЕЛЬ (необязательная; дизайнер может удалить) -->
+<div class="toolbar" id="toolbar"><button type="button" id="lock-again">Скрыть план</button></div>
+
+<!-- РАСШИФРОВАННЫЙ PLAN (контракт: markdown рендерится сюда) -->
+<div id="content"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ==== КОНТРАКТНЫЕ КОНСТАНТЫ (не менять) ====
+  var ENC_URL = 'data/plan.enc';
+  var PBKDF2_ITERATIONS = 200000;   // должно совпадать с tools/crypt.js
+  var SALT_LEN = 16, IV_LEN = 12, TAG_LEN = 16; // base64(salt‖iv‖ct+tag)
+
+  var form = document.getElementById('lock-form');
+  var passInput = document.getElementById('password');
+  var errorBox = document.getElementById('error');
+  var submitBtn = document.getElementById('submit-btn');
+  var contentEl = document.getElementById('content');
+  var toolbar = document.getElementById('toolbar');
+
+  var encryptedB64 = null;  // текст data/plan.enc (публичный, шифротекст)
+  var plainMarkdown = null; // расшифрованный текст — ТОЛЬКО в памяти страницы
+  var markedReady = null;
+
+  function showError(msg) {
+    errorBox.textContent = msg || 'Неверный пароль';
+    errorBox.classList.add('show');
+  }
+  function hideError() { errorBox.classList.remove('show'); }
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64.replace(/\s+/g, ''));
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  // PBKDF2-SHA256 (200k) → AES-256-GCM decrypt. Бросает исключение при неверном пароле.
+  async function decrypt(b64, password) {
+    var raw = b64ToBytes(b64);
+    if (raw.length < SALT_LEN + IV_LEN + TAG_LEN) throw new Error('bad format');
+    var salt = raw.subarray(0, SALT_LEN);
+    var iv = raw.subarray(SALT_LEN, SALT_LEN + IV_LEN);
+    var ct = raw.subarray(SALT_LEN + IV_LEN);
+    var enc = new TextEncoder();
+    var baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    var key = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+      baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct); // ошибка = неверный пароль/порча
+    return new TextDecoder('utf-8').decode(pt);
+  }
+
+  // Ленивая загрузка marked (CDN); при недоступности — сырой текст.
+  function renderMarkdown(md) {
+    if (window.marked && window.marked.parse) {
+      contentEl.innerHTML = window.marked.parse(md);
+      return;
+    }
+    contentEl.innerHTML = '';
+    var pre = document.createElement('pre');
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.textContent = md; // безопасно: текст, не HTML
+    contentEl.appendChild(pre);
+  }
+
+  async function loadMarked() {
+    if (window.marked) return true;
+    if (markedReady) return markedReady;
+    markedReady = new Promise(function (resolve) {
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/marked@14/marked.min.js';
+      s.onload = function () { resolve(true); };
+      s.onerror = function () { resolve(false); };
+      document.head.appendChild(s);
+    });
+    return markedReady;
+  }
+
+  async function openPlan(password) {
+    if (encryptedB64 === null) {
+      var resp = await fetch(ENC_URL, { cache: 'no-store' });
+      if (!resp.ok) throw new Error('load failed');
+      encryptedB64 = await resp.text();
+    }
+    var md = await decrypt(encryptedB64, password); // при неверном пароле — исключение
+    plainMarkdown = md;                             // в памяти; никуда не сохраняем
+    await loadMarked();
+    renderMarkdown(md);
+    contentEl.classList.add('show');
+    toolbar.classList.add('show');
+    document.getElementById('lock').style.display = 'none';
+    passInput.value = '';   // пароль из памяти убираем сразу
+    window.scrollTo(0, 0);
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    hideError();
+    var password = passInput.value;
+    if (!password) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Проверяю…';
+    try {
+      await openPlan(password);
+    } catch (err) {
+      // неверный пароль (auth fail) или не удалось загрузить шифротекст
+      if (err && err.message === 'load failed') {
+        showError('Не удалось загрузить данные. Попробуйте позже.');
+      } else {
+        showError('Неверный пароль');
+        passInput.select();
+        passInput.focus();
+      }
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Открыть';
+    }
+  });
+
+  document.getElementById('lock-again').addEventListener('click', function () {
+    // Скрываем контент из DOM; расшифрованный текст остаётся только в переменной до перезагрузки.
+    contentEl.innerHTML = '';
+    contentEl.classList.remove('show');
+    toolbar.classList.remove('show');
+    document.getElementById('lock').style.display = '';
+    plainMarkdown = null;
+    encryptedB64 = null;
+    passInput.value = '';
+    passInput.focus();
+  });
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js" defer></script>
+</body>
+</html>
