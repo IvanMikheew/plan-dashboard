@@ -64,9 +64,11 @@ N байт : ciphertext ‖ 16 байт auth-tag   (AES-256-GCM)
   (rows — из `отчёты\статистика-авито.csv`, включая `bookingsOld`/`bookingsNew`,
   edits — даты из `журнал-изменений.md`).
 - `tools/sync_avito.ps1` — шифрует CSV → `data/avito.enc` **тем же паролем** (`PLAN_PASSWORD`)
-  и коммитит через GitHub API. Перед шифрованием запускает `tools/calendar_stats.ps1`
-  (свежие записи из Google Calendar по пометкам «новый»/«старый» в событиях; ссылка
-  ICS — `CALENDAR_ICS_URL` в `.env`, ошибка календаря не прерывает заливку).
+  и коммитит через GitHub API. Перед шифрованием запускает `tools/calendar_api.ps1`
+  (свежие записи из Google Calendar по пометкам «новый»/«старый» в событиях:
+  веб-API Apps Script — `CALENDAR_API_URL` в `.env`, см. `tools/apps_script_setup.md`;
+  если URL не задан или запрос упал — автоматический фолбэк на ICS
+  `CALENDAR_ICS_URL`, ошибка календаря не прерывает заливку).
   Флаг `-LocalOnly` — записать файл локально без коммита.
 
 Как обновить статистику (нужны PowerShell, Node.js 18+, `GITHUB_TOKEN` в `.env`):
@@ -91,7 +93,9 @@ data/avito.enc      — зашифрованная статистика Авит
 tools/crypt.js      — шифрование/расшифровка (Node, без зависимостей)
 tools/sync_plan.ps1 — автозаливка плана в репозиторий
 tools/sync_avito.ps1— автозаливка статистики Авито в репозиторий
-tools/calendar_stats.ps1 — записи из Google Calendar → колонки CSV (записи новые/старые)
+tools/calendar_stats.ps1 — записи из Google Calendar → колонки CSV (записи новые/старые), ICS-парсинг
+tools/calendar_api.ps1 — то же через веб-API Apps Script (CALENDAR_API_URL), фолбэк на ICS
+tools/apps_script_setup.md — код Apps Script + инструкция по развёртыванию (секрет: URL)
 README.md           — этот файл
 ```
 

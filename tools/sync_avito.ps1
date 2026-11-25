@@ -3,8 +3,10 @@
   sync_avito.ps1 — шифрует CSV статистики Авито в data/avito.enc и коммитит его в GitHub-репо.
 
 .DESCRIPTION
-  1. Шаг calendar_stats.ps1: свежие колонки записей из Google Calendar (ICS из
-     .env CALENDAR_ICS_URL) → колонки запись_старые/записи_новые в CSV.
+  1. Шаг calendar_api.ps1: свежие колонки записей из Google Calendar — через
+     веб-API (CALENDAR_API_URL в .env, см. apps_script_setup.md), при пустом
+     URL или ошибке запроса — фолбэк на ICS (CALENDAR_ICS_URL, calendar_stats.ps1)
+     → колонки запись_старые/записи_новые в CSV.
      Неблокирующий: ошибка календаря не прерывает заливку (WARN).
   2. Читает CSV статистики (дата,объявление_id,показы,просмотры,контакты,записи,
      запись_старые,записи_новые,источник).
@@ -73,15 +75,16 @@ if (-not $token) { Fail 'GITHUB_TOKEN пуст' 4 }
 
 # --- 2.5 Шаг calendar: обновить колонки записей из Google Calendar ----------
 # Неблокирующий: календарь недоступен → WARN и заливка идёт по текущему CSV.
-$calScript = Join-Path $PSScriptRoot 'calendar_stats.ps1'
+# calendar_api.ps1 сам фолбэчится на ICS (calendar_stats.ps1), если API не задан.
+$calScript = Join-Path $PSScriptRoot 'calendar_api.ps1'
 if (Test-Path -LiteralPath $calScript) {
   Write-Host 'calendar: обновляю колонки записей из Google Calendar…'
   & powershell -NoProfile -ExecutionPolicy Bypass -File $calScript -CsvPath $CsvPath
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARN: calendar_stats завершился с кодом $LASTEXITCODE — колонки записей не обновлены" -ForegroundColor Yellow
+    Write-Host "WARN: calendar_api завершился с кодом $LASTEXITCODE — колонки записей не обновлены" -ForegroundColor Yellow
   }
 } else {
-  Write-Host "WARN: calendar_stats.ps1 не найден ($calScript) — пропускаю" -ForegroundColor Yellow
+  Write-Host "WARN: calendar_api.ps1 не найден ($calScript) — пропускаю" -ForegroundColor Yellow
 }
 
 # --- 3. CSV -> JSON ---------------------------------------------------------
