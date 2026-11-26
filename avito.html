@@ -369,6 +369,23 @@
   }
   .tw tr.hl td { background: var(--accent-soft); }
 
+  /* --- пагинация таблицы: 31 строка на страницу (ADR-0003) --- */
+  .pager {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    margin: -6px 0 16px;
+  }
+  .pg-btn {
+    border: 1.5px solid var(--line); background: var(--card); color: var(--txt);
+    font-size: 14px; font-weight: 650;
+    padding: 9px 16px; border-radius: 11px; cursor: pointer; min-height: 44px;
+  }
+  .pg-btn:disabled { opacity: .45; cursor: default; }
+  .pg-btn:not(:disabled):active { background: var(--accent-soft); }
+  .pg-info {
+    font-size: 14px; font-weight: 650; color: var(--muted);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+
   /* --- ручные значения: ячейки ввода, «+ Запись», сброс (localStorage) --- */
   .bk-td { padding: 4px 6px; }
   .bk-input {
@@ -1052,7 +1069,73 @@ window.AvitoUI = (function () {
   }
 
   // ---- рендер ------------------------------------------------------------
+  // ==== ПАГИНАЦИЯ ТАБЛИЦЫ (R3, ADR-0003): 31 строка на страницу =========
+  var PAGE_SIZE = 31;
+  function pageCount(n) { return Math.max(1, Math.ceil(n / PAGE_SIZE)); }
+  // текущая страница строк (новые сверху); страницу прижимаем к диапазону
+  function pageRows(desc) {
+    var pc = pageCount(desc.length);
+    if (state.page > pc) state.page = pc;
+    if (state.page < 1) state.page = 1;
+    var start = (state.page - 1) * PAGE_SIZE;
+    return desc.slice(start, start + PAGE_SIZE);
+  }
+  // HTML таблицы: ровно одна страница (≤31 строка в DOM)
+  function tableHTML(active) {
+    var rows = pageRows(active.slice().reverse());
+    var editSet = {};
+    ((lastData && lastData.edits) || []).forEach(function (e) { editSet[e] = true; });
+    var html = '<table><thead><tr>' +
+      '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>Просмотры %</th>' +
+      '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th><th>К→З</th>' +
+      '<th>Записи старые</th><th>Записи новые</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
+      var p2c = r.views ? (r.contacts || 0) / r.views : null;
+      // К→З = записи_новые_дня ÷ контакты_дня (ADR-0007); пусто/0 → «—»
+      var k2z = (r.contacts || 0) > 0 && r.bookingsNew != null && r.bookingsNew > 0 ?
+        pct(r.bookingsNew / r.contacts) : '—';
+      html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
+        '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
+        '<td>' + fmt(r.impressions || 0) + '</td>' +
+        '<td>' + fmt(r.views || 0) + '</td>' +
+        '<td>' + pct(ctr) + '</td>' +
+        '<td>' + fmt(r.contacts || 0) + '</td>' +
+        '<td>' + pct(p2c) + '</td>' +
+        '<td data-sum="1" data-date="' + r.date + '">' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
+        '<td data-k2z="1" data-date="' + r.date + '">' + k2z + '</td>' +
+        bkCell(r, 'old') + bkCell(r, 'new') +
+        '</tr>';
+    });
+    return html + '</tbody></table>';
+  }
+  function pagerHTML(n) {
+    var pc = pageCount(n);
+    return '<button type="button" class="pg-btn" id="pg-prev"' +
+      (state.page <= 1 ? ' disabled' : '') + '>← Назад</button>' +
+      '<span class="pg-info">Стр. ' + state.page + ' из ' + pc + '</span>' +
+      '<button type="button" class="pg-btn" id="pg-next"' +
+      (state.page >= pc ? ' disabled' : '') + '>Вперёд →</button>';
+  }
+  // смена страницы = перерисовка только таблицы и счётчика:
+  // скролл, KPI и позиция ввода не трогаются
+  function wirePager(p) {
+    p.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('button') : null;
+      if (!b || b.disabled) return;
+      if (b.id === 'pg-prev') state.page -= 1;
+      else if (b.id === 'pg-next') state.page += 1;
+      else return;
+      var v = computeView();
+      var tw = els.content.querySelector('.tw');
+      if (tw) tw.innerHTML = tableHTML(v.active);
+      p.innerHTML = pagerHTML(v.active.length);
+    });
+  }
+
   function render(data) {
+    if (data !== lastData) state.page = 1;   // новые данные — с первой страницы
     lastData = data;
     rebuild();
   }
@@ -1163,43 +1246,25 @@ window.AvitoUI = (function () {
     content.appendChild(bar);
     wireReset(bar);
 
-    // 5) таблица по дням («Записи новые/старые» — поля ввода, только цифры)
+    // 5) таблица по дням: только текущая страница — ≤31 строки в DOM (R3)
     var tw = document.createElement('div');
     tw.className = 'tw';
     tw.setAttribute('tabindex', '0');
     tw.setAttribute('role', 'region');
     tw.setAttribute('aria-label', 'Таблица по дням (прокручивается по горизонтали)');
-    var html = '<table><thead><tr>' +
-      '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>Просмотры %</th>' +
-      '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th><th>К→З</th>' +
-      '<th>Записи старые</th><th>Записи новые</th>' +
-      '</tr></thead><tbody>';
-    var editSet = {};
-    (data.edits || []).forEach(function (e) { editSet[e] = true; });
-    active.slice().reverse().forEach(function (r) {
-      var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
-      var p2c = r.views ? (r.contacts || 0) / r.views : null;
-      // К→З = записи_новые_дня ÷ контакты_дня (ADR-0007); пусто/0 → «—»
-      var k2z = (r.contacts || 0) > 0 && r.bookingsNew != null && r.bookingsNew > 0 ?
-        pct(r.bookingsNew / r.contacts) : '—';
-      html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
-        '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
-        '<td>' + fmt(r.impressions || 0) + '</td>' +
-        '<td>' + fmt(r.views || 0) + '</td>' +
-        '<td>' + pct(ctr) + '</td>' +
-        '<td>' + fmt(r.contacts || 0) + '</td>' +
-        '<td>' + pct(p2c) + '</td>' +
-        '<td data-sum="1" data-date="' + r.date + '">' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
-        '<td data-k2z="1" data-date="' + r.date + '">' + k2z + '</td>' +
-        bkCell(r, 'old') + bkCell(r, 'new') +
-        '</tr>';
-    });
-    html += '</tbody></table>';
-    tw.innerHTML = html;
+    tw.innerHTML = tableHTML(active);
     wireCells(tw);
     content.appendChild(tw);
 
-    // 6) навигация
+    // 6) пагинация под таблицей («Назад/Вперёд» + счётчик)
+    var pager = document.createElement('div');
+    pager.className = 'pager';
+    pager.id = 'pager';
+    pager.innerHTML = pagerHTML(active.length);
+    content.appendChild(pager);
+    wirePager(pager);
+
+    // 7) навигация
     var nav = document.createElement('div');
     nav.className = 'foot-nav';
     nav.innerHTML = '<a href="index.html">← План</a>';

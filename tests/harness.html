@@ -291,6 +291,74 @@
     eq('R2: без avito.enc-запросов при смене фильтра', encRequests() - encBefore, 0);
     eq('R2: без decrypt при смене фильтра', decCount, 0);
     eq('R2: запросов avito.enc за тест всего', encBefore, 0);
+
+    // ================= TASK-3: пагинация (31 строка) =====================
+    function pagerInfo() {
+      var el = cd.querySelector('#pager .pg-info');
+      return el ? el.textContent : null;
+    }
+    function tblRows() { return cd.querySelectorAll('.tw tbody tr').length; }
+    function btnDisabled(id) {
+      var b = cd.getElementById(id);
+      return b ? b.disabled : null;
+    }
+
+    // 32 строки → 2 страницы (31+1)
+    cw.AvitoUI.render(F.pagi(32));
+    eq('R3: 32 строки → «Стр. 1 из 2»', pagerInfo(), 'Стр. 1 из 2');
+    eq('R3: на странице 31 строка в DOM', tblRows(), 31);
+    eq('R3: «Назад» на первой странице disabled', btnDisabled('pg-prev'), true);
+    eq('R3: «Вперёд» на первой странице enabled', btnDisabled('pg-next'), false);
+    eq('R3: сверху самая новая дата', cd.querySelector('.tw tbody tr td').textContent, ruDate(a));
+
+    cd.getElementById('pg-next').click();
+    eq('R3: «Вперёд» → «Стр. 2 из 2»', pagerInfo(), 'Стр. 2 из 2');
+    eq('R3: на второй странице 1 строка', tblRows(), 1);
+    eq('R3: «Вперёд» на последней disabled', btnDisabled('pg-next'), true);
+    eq('R3: «Назад» включён', btnDisabled('pg-prev'), false);
+    eq('R3: сверху старая дата (32-я)', cd.querySelector('.tw tbody tr td').textContent,
+      ruDate(F.addDays(a, -31)));
+
+    cd.getElementById('pg-prev').click();
+    eq('R3: «Назад» → снова «Стр. 1 из 2»', pagerInfo(), 'Стр. 1 из 2');
+
+    // 31 строка → 1 страница, листание недоступно
+    cw.AvitoUI.render(F.pagi(31));
+    eq('R3: 31 строка → «Стр. 1 из 1»', pagerInfo(), 'Стр. 1 из 1');
+    eq('R3: «Назад» disabled', btnDisabled('pg-prev'), true);
+    eq('R3: «Вперёд» disabled', btnDisabled('pg-next'), true);
+
+    // правка на стр. 2: значение в localStorage, KPI обновлены, страница = 2
+    cw.AvitoUI.render(F.pagi(32));
+    cd.getElementById('pg-next').click();
+    var oldDate = F.addDays(a, -31);
+    var inp2 = cd.querySelector('input[data-role="bk"][data-date="' + oldDate + '"][data-kind="new"]');
+    ok('R3: поле правки на стр. 2 есть', !!inp2);
+    if (inp2) {
+      inp2.value = '3';
+      inp2.dispatchEvent(new cw.Event('input', { bubbles: true }));
+      eq('R3: KPI «Записи новые» обновились без смены страницы', kval('Записи новые'), fmt(3));
+      eq('R3: активная страница осталась 2', pagerInfo(), 'Стр. 2 из 2');
+      eq('R3: строк в DOM по-прежнему 1', tblRows(), 1);
+      var ls3 = {};
+      try { ls3 = JSON.parse(cw.localStorage.getItem('avito_manual_v1') || '{}'); } catch (e3) {}
+      ok('R3: правка сохранена в avito_manual_v1',
+        !!(ls3.cells && ls3.cells[oldDate] && ls3.cells[oldDate].new === '3'),
+        JSON.stringify(ls3.cells || {}));
+      inp2.value = '';
+      inp2.dispatchEvent(new cw.Event('input', { bubbles: true }));
+      eq('R3: очистка → снова «—»', kval('Записи новые'), '—');
+    }
+
+    // смена фильтра → возврат на стр. 1
+    cw.AvitoUI.render(F.main());          // 33 строки → 2 страницы
+    eq('R3: 33 строки → «Стр. 1 из 2»', pagerInfo(), 'Стр. 1 из 2');
+    cd.getElementById('pg-next').click();
+    eq('R3: ушли на стр. 2', pagerInfo(), 'Стр. 2 из 2');
+    clickPreset('7');
+    eq('R3: смена фильтра → стр. 1', pagerInfo(), 'Стр. 1 из 1');
+    eq('R3: под фильтром «7 дней» — 5 строк', tblRows(), 5);
+    clickPreset('all');
   }
 })();
 </script>
