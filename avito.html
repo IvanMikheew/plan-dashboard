@@ -24,7 +24,16 @@
        edits: ["ГГГГ-ММ-ДД", ...] }   // даты правок из журнала изменений
      bookings: null = данных нет. bookingsOld/bookingsNew — записи от старых/новых
       клиентов по пометкам в Google Calendar (null = данных нет).
-  4) Ошибка GCM tag → «Неверный пароль»; нет файла → «Не удалось загрузить».
+   4) Поверх серверных данных — СЛОЙ РУЧНЫХ ЗНАЧЕНИЙ (контракт шифрования не
+      трогает): localStorage этого браузера, ключ 'avito_manual_v1' (имя с
+      версией формата): { cells: {дата: {new, old}},   // правки ячеек таблицы
+                         adds: [{bd, sd, q, t}] }      // «+ Запись»: bd — дата
+      брони, sd — дата сеанса (может быть null), q — количество, t — new|old.
+   5) ПРАВИЛО ДАТ: дата брони ≠ дата сеанса. Конверсии (KPI «Контакт → запись»)
+      считаются по ДАТЕ БРОНИ; строка таблицы = дата СЕАНСА, если указана,
+      иначе дата брони. У серверных rows даты брони нет (календарь — по дате
+      сеанса); в будущей CRM у записи будут ОБЕ даты.
+   6) Ошибка GCM tag → «Неверный пароль»; нет файла → «Не удалось загрузить».
   ==========================================================================
 -->
 
@@ -42,7 +51,7 @@
     --accent-soft: #e8ecfb;
     --err-bg: #fdecec; --err-tx: #a01b12;
     --st-red: #fbe4e2; --st-green: #dff2e4; --st-gray: #eceef2;
-    --chart2: #d97706;                /* вторая линия графика (CTR) */
+    --chart2: #d97706;                /* вторая линия графика («Просмотры %») */
     --shadow: 0 1px 2px rgba(16,20,30,.05), 0 10px 30px rgba(16,20,30,.07);
     --radius: 16px;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -248,6 +257,7 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  @media (max-width: 559px) { .kpi-sub { white-space: normal; } }  /* дельта не обрезается на 360px */
   .kpi-delta { font-weight: 700; }
   .kpi-delta.up { color: #157a3c; }
   .kpi-delta.down { color: #b3261e; }
@@ -307,6 +317,84 @@
     background: color-mix(in srgb, var(--bg) 55%, var(--card));
   }
   .tw tr.hl td { background: var(--accent-soft); }
+
+  /* --- ручные значения: ячейки ввода, «+ Запись», сброс (localStorage) --- */
+  .bk-td { padding: 4px 6px; }
+  .bk-input {
+    width: 4.5ch; min-height: 32px;
+    padding: 3px 5px;
+    font: inherit; font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: inherit;
+    background: transparent;
+    border: 1.5px solid transparent;
+    border-radius: 8px;
+    transition: border-color .15s, background .15s;
+  }
+  .bk-input:hover { border-color: var(--line); }
+  .bk-input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+  .tw tr td.manual { background: color-mix(in srgb, var(--chart2) 22%, transparent); }
+
+  .manual-bar {
+    display: flex; flex-wrap: wrap; gap: 8px 12px;
+    align-items: center; justify-content: space-between;
+    margin: 0 0 8px;
+  }
+  .manual-note { font-size: 12.5px; color: var(--muted); }
+  .btn-reset {
+    border: 1.5px solid var(--line); background: var(--card); color: var(--muted);
+    font-size: 13px; font-weight: 650;
+    padding: 8px 13px; border-radius: 10px; cursor: pointer;
+    min-height: 38px;
+  }
+  .btn-reset:active { background: var(--accent-soft); }
+
+  .add-form {
+    display: flex; flex-wrap: wrap; gap: 8px 10px;
+    align-items: flex-end;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    padding: 10px 12px;
+    margin: 0 0 6px;
+    box-shadow: 0 1px 2px rgba(16,20,30,.04);
+  }
+  .add-title { font-size: 13px; font-weight: 750; align-self: center; }
+  .add-form label {
+    display: flex; flex-direction: column; gap: 3px;
+    font-size: 11.5px; font-weight: 650; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .add-form label i { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 500; }
+  .add-form input {
+    font-family: inherit; font-size: 15px; color: inherit;
+    padding: 7px 9px; min-height: 38px;
+    border: 1.5px solid var(--line); border-radius: 9px;
+    background: var(--bg);
+  }
+  .add-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  #add-q { width: 5ch; text-align: center; }
+  .seg {
+    display: inline-flex; align-self: flex-end;
+    border: 1.5px solid var(--line); border-radius: 9px; overflow: hidden;
+  }
+  .seg button {
+    border: 0; background: var(--bg); color: var(--muted);
+    font-size: 13px; font-weight: 650;
+    padding: 8px 11px; min-height: 38px; cursor: pointer;
+  }
+  .seg button.on { background: var(--accent); color: var(--accent-fg); }
+  .btn-add {
+    align-self: flex-end;
+    border: 0; border-radius: 9px;
+    background: var(--accent); color: var(--accent-fg);
+    font-size: 14px; font-weight: 700;
+    padding: 8px 14px; min-height: 38px; cursor: pointer;
+  }
+  .btn-add:active { transform: scale(.985); }
+  .add-status { display: none; font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .add-status.on { display: block; }
 
   .foot-nav {
     text-align: center;
@@ -392,6 +480,82 @@ window.AvitoUI = (function () {
     return d.slice(8, 10) + '.' + d.slice(5, 7);
   }
 
+  // ==== РУЧНЫЕ ЗНАЧЕНИЯ (localStorage этого браузера, поверх серверных) =====
+  // Контракт — в комментарии вверху файла: ключ с версией формата, слой не
+  // трогает шифрование. Пока что — локально; позже переедет в CRM.
+  // ПРАВИЛО ДАТ: дата брони ≠ дата сеанса. Строка таблицы = дата сеанса (sd),
+  // если указана, иначе дата брони (bd); конверсии — по дате брони.
+  var LS_KEY = 'avito_manual_v1';
+  var manual = { cells: {}, adds: [] };
+  var lastData = null;
+  var lastStatus = '';
+
+  function loadManual() {
+    try {
+      var s = localStorage.getItem(LS_KEY);
+      var p = s ? JSON.parse(s) : null;
+      manual = (p && typeof p === 'object') ? p : {};
+    } catch (e) { manual = {}; }
+    if (!manual.cells || typeof manual.cells !== 'object') manual.cells = {};
+    if (!manual.adds || Object.prototype.toString.call(manual.adds) !== '[object Array]') manual.adds = [];
+  }
+  function saveManual() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(manual)); } catch (e) {}
+  }
+  function cellOverride(date, kind) {   // правка ячейки (null = нет правки)
+    var c = manual.cells[date];
+    if (!c) return null;
+    var v = c[kind];
+    if (v === undefined || v === null || v === '') return null;
+    var n = parseInt(v, 10);
+    return isNaN(n) ? null : n;
+  }
+  function isManual(date, kind) { return cellOverride(date, kind) !== null; }
+  function dropOverride(date, kind) {
+    var c = manual.cells[date];
+    if (!c) return;
+    delete c[kind];
+    if (!Object.keys(c).length) delete manual.cells[date];
+  }
+  function setOverride(date, kind, val) {
+    if (!manual.cells[date]) manual.cells[date] = {};
+    manual.cells[date][kind] = String(val);
+  }
+  function addedFor(date, kind) {      // сумма «+ Запись», попавших в строку дня
+    var s = 0;
+    manual.adds.forEach(function (a) {
+      var d = a.sd || a.bd;            // строка = дата сеанса, иначе брони
+      if (d === date && (a.t === 'old' ? 'old' : 'new') === kind) s += a.q || 0;
+    });
+    return s;
+  }
+  // эффективные строки: сервер + правки ячеек + «+ Запись»
+  function effRows(rows) {
+    return rows.map(function (r) {
+      var bn = cellOverride(r.date, 'new');
+      var bo = cellOverride(r.date, 'old');
+      if (bn === null) bn = (r.bookingsNew == null ? null : r.bookingsNew);
+      if (bo === null) bo = (r.bookingsOld == null ? null : r.bookingsOld);
+      var an = addedFor(r.date, 'new'), ao = addedFor(r.date, 'old');
+      function merge(b, a) { if (b == null) return a > 0 ? a : null; return b + a; }
+      var n = merge(bn, an), o = merge(bo, ao);
+      var out = {};
+      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) out[k] = r[k];
+      out.bookingsNew = n;
+      out.bookingsOld = o;
+      out.bookings = (n == null && o == null) ? null : (n || 0) + (o || 0);
+      out.baseNew = bn;                 // без «+ Запись» — для KPI по дате брони
+      out.baseOld = bo;
+      return out;
+    });
+  }
+  function todayISO() {
+    var t = new Date();
+    return t.getFullYear() + '-' +
+      String(t.getMonth() + 1).padStart(2, '0') + '-' +
+      String(t.getDate()).padStart(2, '0');
+  }
+
   // ---- агрегаты ----------------------------------------------------------
   function sum(rows, key) {
     var s = 0, any = false;
@@ -408,44 +572,55 @@ window.AvitoUI = (function () {
     });
     return d > 0 ? n / d : null;
   }
-  function kpis(rows) {
+  function kpis(rows, period) {
     var imp = sum(rows, 'impressions') || 0;
     var vis = sum(rows, 'views') || 0;
     var con = sum(rows, 'contacts') || 0;
-    var bkRows = rows.filter(function (r) { return r.bookings != null; });
-    var bk = bkRows.length ? sum(rows, 'bookings') : null;
-    var bkw = sum(rows, 'bookingsNew');   // записи от новых клиентов (календарь)
-    var bko = sum(rows, 'bookingsOld');   // записи от старых клиентов (календарь)
+    var bk = sum(rows, 'bookings');
+    var bkw = sum(rows, 'bookingsNew');
+    var bko = sum(rows, 'bookingsOld');
+    // «Контакт → запись» = записи ÷ контакты за период; записи — по ДАТЕ БРОНИ:
+    // база строк (сервер/правки ячеек — даты брони нет, считаем по строкам периода)
+    // + добавленные «+ Запись» с датой брони внутри периода.
+    var sBase = 0, hasBase = false, sAdd = 0;
+    rows.forEach(function (r) {
+      if (r.baseNew != null) { sBase += r.baseNew; hasBase = true; }
+      if (r.baseOld != null) { sBase += r.baseOld; hasBase = true; }
+    });
+    if (period) {
+      manual.adds.forEach(function (a) {
+        if (a.bd && a.bd >= period[0] && a.bd <= period[1]) sAdd += a.q || 0;
+      });
+    }
+    var num = (hasBase || sAdd > 0) ? sBase + sAdd : null;
+    var k2z = (num != null && con > 0) ? num / con : null;
     return [
-      { label: 'Показы',      value: fmt(imp), raw: imp, type: 'count' },
-      { label: 'Просмотры',   value: fmt(vis), raw: vis, type: 'count' },
-      { label: 'CTR',         value: pct(vis && imp ? vis / imp : null), raw: imp ? vis / imp : null, type: 'rate' },
-      { label: 'Контакты',    value: fmt(con), raw: con, type: 'count' },
-      { label: 'Просмотр → контакт', value: pct(vis && con ? con / vis : null), raw: vis && con ? con / vis : null, type: 'rate' },
-      { label: 'Записи',      value: bk == null ? '—' : fmt(bk), raw: bk, type: 'count',
-        sub: bk == null ? 'нет данных' : null },
-      { label: 'Записи новые', value: bkw == null ? '—' : fmt(bkw), raw: bkw, type: 'count',
-        sub: 'за период' },
-      { label: 'Записи старые', value: bko == null ? '—' : fmt(bko), raw: bko, type: 'count',
-        sub: 'за период' }
+      { label: 'Показы',      type: 'count', sumKey: 'impressions', value: fmt(imp), raw: imp },
+      { label: 'Просмотры',   type: 'count', sumKey: 'views',       value: fmt(vis), raw: vis },
+      { label: 'Просмотры %', type: 'rate',  nKey: 'views', dKey: 'impressions',
+        value: pct(vis && imp ? vis / imp : null), raw: imp ? vis / imp : null },
+      { label: 'Контакты',    type: 'count', sumKey: 'contacts',    value: fmt(con), raw: con },
+      { label: 'Просмотр → контакт', type: 'rate', nKey: 'contacts', dKey: 'views',
+        value: pct(vis && con ? con / vis : null), raw: vis && con ? con / vis : null },
+      { label: 'Записи',      type: 'count', sumKey: 'bookings',
+        value: bk == null ? '—' : fmt(bk), raw: bk, sub: bk == null ? 'нет данных' : null },
+      { label: 'Записи новые', type: 'count', sumKey: 'bookingsNew',
+        value: bkw == null ? '—' : fmt(bkw), raw: bkw, sub: 'за период' },
+      { label: 'Записи старые', type: 'count', sumKey: 'bookingsOld',
+        value: bko == null ? '—' : fmt(bko), raw: bko, sub: 'за период' },
+      { label: 'Контакт → запись', type: 'rate', nKey: 'bookings', dKey: 'contacts',
+        value: pct(k2z), raw: k2z, sub: num == null ? 'нет данных' : null }
     ];
   }
-  // дельта: последние 7 дней к предыдущим (окно ≥3 дней)
+  // дельта: последние 7 дней к предыдущим (окно ≥3 дней); ключи — из kpi
   function delta7(rows, kpi) {
     if (rows.length < 6) return null;
     var last = rows.slice(-7);
     var prev = rows.slice(-14, -7);
     if (prev.length < 3) return null;
     function val(rs) {
-      if (kpi.type === 'rate') {
-        var nKey = kpi.label === 'CTR' ? 'views' : 'contacts';
-        var dKey = kpi.label === 'CTR' ? 'impressions' : 'views';
-        return rate(rs, nKey, dKey);
-      }
-      var s = sum(rs, kpi.label === 'Показы' ? 'impressions'
-                   : kpi.label === 'Просмотры' ? 'views'
-                   : kpi.label === 'Контакты' ? 'contacts' : 'bookings');
-      return s;
+      if (kpi.type === 'rate') return rate(rs, kpi.nKey, kpi.dKey);
+      return sum(rs, kpi.sumKey);
     }
     var a = val(prev), b = val(last);
     if (a == null || b == null || !a) return null;
@@ -523,13 +698,13 @@ window.AvitoUI = (function () {
 
     var byDate = {};
     rows.forEach(function (r) { byDate[r.date] = r; });
-    var ctrSma = sma7(rows, 'views');    // ниже — пересчёт в CTR
+    var ctrSma = sma7(rows, 'views');    // ниже — пересчёт в «Просмотры %»
     var p2cSma = sma7(rows, 'contacts');
     var smaByDate = {};
     rows.forEach(function (r, i) {
       var ctr = null, p2c = null;
       if (ctrSma[i] != null && r.impressions) {
-        // SMA7 просмотров ÷ SMA7 показов — честнее, чем среднее дневных CTR
+        // SMA7 просмотров ÷ SMA7 показов — честнее, чем среднее дневных «Просмотры %»
         var sImp = 0, sVis = 0, sCon = 0;
         for (var j = i - 6; j <= i; j++) { sImp += rows[j].impressions || 0; sVis += rows[j].views || 0; sCon += rows[j].contacts || 0; }
         ctr = sImp ? sVis / sImp : null;
@@ -605,7 +780,7 @@ window.AvitoUI = (function () {
       ctx.globalAlpha = 1;
     }
 
-    // линии: CTR (SMA7) и просмотр→контакт (SMA7), правая ось
+    // линии: «Просмотры %» (SMA7) и просмотр→контакт (SMA7), правая ось
     function drawLine(key, color) {
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
@@ -643,7 +818,10 @@ window.AvitoUI = (function () {
 
   // ---- рендер ------------------------------------------------------------
   function render(data) {
-    var rows = (data.rows || []).slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    lastData = data;
+    var rows = sortedRows(data);
+    var eff = effRows(rows);            // сервер + правки ячеек + «+ Запись»
+    var period = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
     var content = els.content;
     content.innerHTML = '';
 
@@ -666,12 +844,13 @@ window.AvitoUI = (function () {
     }
     content.appendChild(trend);
 
-    // 2) 6 KPI-плашек
+    // 2) KPI-плашки (9)
     var grid = document.createElement('div');
     grid.className = 'kpi-grid';
-    kpis(rows).forEach(function (k) {
+    kpis(eff, period).forEach(function (k) {
       var card = document.createElement('div');
       card.className = 'kpi';
+      card.setAttribute('data-kpi', k.label);
       var lab = document.createElement('div');
       lab.className = 'kpi-label';
       lab.textContent = k.label;
@@ -680,22 +859,7 @@ window.AvitoUI = (function () {
       val.textContent = k.value;
       var subEl = document.createElement('div');
       subEl.className = 'kpi-sub';
-      if (k.sub) {
-        subEl.textContent = k.sub;
-      } else {
-        var d = delta7(rows, k);
-        var range = rows.length + ' дн.';
-        if (d == null) {
-          subEl.textContent = 'за период (' + range + ')';
-        } else {
-          subEl.innerHTML = 'за 7 дней · к прошлой нед. ';
-          var sp = document.createElement('span');
-          sp.className = 'kpi-delta ' + (d > 0.005 ? 'up' : d < -0.005 ? 'down' : '');
-          var sign = d > 0 ? '+' : '';
-          sp.textContent = sign + Math.round(d * 100) + '%';
-          subEl.appendChild(sp);
-        }
-      }
+      fillSub(subEl, k, eff);
       card.appendChild(lab); card.appendChild(val); card.appendChild(subEl);
       grid.appendChild(card);
     });
@@ -705,32 +869,66 @@ window.AvitoUI = (function () {
     var chartCard = document.createElement('div');
     chartCard.className = 'card';
     chartCard.innerHTML =
-      '<h2>28 дней — просмотры (столбцы), CTR и «просмотр → контакт», SMA7</h2>' +
+      '<h2>28 дней — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», SMA7</h2>' +
       '<div class="chart-wrap"><canvas id="chart" role="img" aria-label="График статистики за 28 дней"></canvas></div>' +
       '<div class="legend">' +
       '<span><i class="lg bar"></i>просмотры</span>' +
-      '<span><i class="lg l2"></i>CTR (SMA7)</span>' +
+      '<span><i class="lg l2"></i>Просмотры % (SMA7)</span>' +
       '<span><i class="lg l1"></i>просмотр → контакт (SMA7)</span>' +
       '<span><i class="lg edit"></i>даты правок</span>' +
       '</div>';
     content.appendChild(chartCard);
 
-    // 4) таблица по дням
+    // 4) форма «+ Запись» (обе даты: бронь обязательна, сеанс опционален),
+    //    примечание про localStorage и сброс ручных значений
+    var form = document.createElement('form');
+    form.className = 'add-form';
+    form.id = 'add-form';
+    form.setAttribute('autocomplete', 'off');
+    form.innerHTML =
+      '<span class="add-title">+ Запись</span>' +
+      '<label>Дата брони<input type="date" id="add-bd" required></label>' +
+      '<label>Дата сеанса <i>(необяз.)</i><input type="date" id="add-sd"></label>' +
+      '<label>Кол-во<input type="text" inputmode="numeric" pattern="[0-9]*" id="add-q" value="1"></label>' +
+      '<span class="seg" role="group" aria-label="Тип клиента">' +
+      '<button type="button" data-t="new" class="on">Новый</button>' +
+      '<button type="button" data-t="old">Старый</button></span>' +
+      '<button type="submit" class="btn-add">Добавить</button>';
+    content.appendChild(form);
+    wireAddForm(form);
+
+    var statusEl = document.createElement('div');
+    statusEl.id = 'add-status';
+    statusEl.className = 'add-status' + (lastStatus ? ' on' : '');
+    statusEl.setAttribute('role', 'status');
+    statusEl.textContent = lastStatus;
+    content.appendChild(statusEl);
+
+    var bar = document.createElement('div');
+    bar.className = 'manual-bar';
+    bar.innerHTML =
+      '<span class="manual-note">Ручные значения хранятся в этом браузере</span>' +
+      '<button type="button" class="btn-reset" id="reset-manual">Сбросить ручные значения</button>';
+    content.appendChild(bar);
+    wireReset(bar);
+
+    // 5) таблица по дням («Записи новые/старые» — поля ввода, только цифры)
     var tw = document.createElement('div');
     tw.className = 'tw';
     tw.setAttribute('tabindex', '0');
     tw.setAttribute('role', 'region');
     tw.setAttribute('aria-label', 'Таблица по дням (прокручивается по горизонтали)');
     var html = '<table><thead><tr>' +
-      '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>CTR</th>' +
-      '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th>' +
+      '<th>Дата</th><th>Показы</th><th>Просмотры</th><th>Просмотры %</th>' +
+      '<th>Контакты</th><th>Просмотр→конт</th><th>Записи</th><th>К→З</th>' +
       '<th>Записи старые</th><th>Записи новые</th>' +
       '</tr></thead><tbody>';
     var editSet = {};
     (data.edits || []).forEach(function (e) { editSet[e] = true; });
-    rows.slice().reverse().forEach(function (r) {
+    eff.slice().reverse().forEach(function (r) {
       var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
       var p2c = r.views ? (r.contacts || 0) / r.views : null;
+      var k2z = (r.contacts || 0) > 0 && r.bookings != null ? pct(r.bookings / r.contacts) : '—';
       html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
         '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
         '<td>' + fmt(r.impressions || 0) + '</td>' +
@@ -738,16 +936,17 @@ window.AvitoUI = (function () {
         '<td>' + pct(ctr) + '</td>' +
         '<td>' + fmt(r.contacts || 0) + '</td>' +
         '<td>' + pct(p2c) + '</td>' +
-        '<td>' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
-        '<td>' + (r.bookingsOld == null ? '—' : fmt(r.bookingsOld)) + '</td>' +
-        '<td>' + (r.bookingsNew == null ? '—' : fmt(r.bookingsNew)) + '</td>' +
+        '<td data-sum="1" data-date="' + r.date + '">' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
+        '<td data-k2z="1" data-date="' + r.date + '">' + k2z + '</td>' +
+        bkCell(r, 'old') + bkCell(r, 'new') +
         '</tr>';
     });
     html += '</tbody></table>';
     tw.innerHTML = html;
+    wireCells(tw);
     content.appendChild(tw);
 
-    // 5) навигация
+    // 6) навигация
     var nav = document.createElement('div');
     nav.className = 'foot-nav';
     nav.innerHTML = '<a href="index.html">← План</a>';
@@ -764,6 +963,163 @@ window.AvitoUI = (function () {
     window.__avitoRO.observe(chartCard);
   }
 
+  // ---- ручные значения: ячейки ввода, «+ Запись», сброс -------------------
+  function sortedRows(data) {
+    return (data.rows || []).slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  }
+  function serverVal(date, kind) {        // значение из данных сервера (без ручных)
+    var rs = (lastData && lastData.rows) || [];
+    for (var i = 0; i < rs.length; i++) {
+      if (rs[i].date === date) {
+        var v = kind === 'new' ? rs[i].bookingsNew : rs[i].bookingsOld;
+        return v == null ? null : v;
+      }
+    }
+    return null;
+  }
+  function effRow(date) {
+    if (!lastData) return null;
+    var rs = effRows(sortedRows(lastData));
+    for (var i = 0; i < rs.length; i++) if (rs[i].date === date) return rs[i];
+    return null;
+  }
+  function fillSub(subEl, k, rows) {
+    if (k.sub) { subEl.textContent = k.sub; return; }
+    var d = delta7(rows, k);
+    if (d == null) {
+      subEl.textContent = 'за период (' + rows.length + ' дн.)';
+      return;
+    }
+    subEl.innerHTML = 'за 7 дней · к прошлой нед. ';
+    var sp = document.createElement('span');
+    sp.className = 'kpi-delta ' + (d > 0.005 ? 'up' : d < -0.005 ? 'down' : '');
+    sp.textContent = (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
+    subEl.appendChild(sp);
+  }
+  function bkCell(r, kind) {
+    var v = kind === 'new' ? r.bookingsNew : r.bookingsOld;
+    var ch = isManual(r.date, kind);
+    return '<td class="bk-td' + (ch ? ' manual' : '') + '" data-bktd="' + kind + '" data-date="' + r.date + '">' +
+      '<input class="bk-input" data-role="bk" data-kind="' + kind + '" data-date="' + r.date + '"' +
+      ' inputmode="numeric" pattern="[0-9]*" value="' + (v == null ? '' : v) + '"' +
+      ' aria-label="Записи ' + (kind === 'new' ? 'новые' : 'старые') + ' ' + ruDate(r.date) + '"></td>';
+  }
+  function wireCells(tw) {
+    tw.addEventListener('input', function (e) {
+      var t = e.target;
+      if (t.getAttribute && t.getAttribute('data-role') === 'bk') cellInput(t);
+    });
+    tw.addEventListener('focusout', function (e) {
+      var t = e.target;
+      if (t.getAttribute && t.getAttribute('data-role') === 'bk') cellResync(t);
+    });
+  }
+  function cellInput(inp) {
+    var d = inp.getAttribute('data-date'), kind = inp.getAttribute('data-kind');
+    var digits = String(inp.value).replace(/\D/g, '');
+    if (digits !== inp.value) inp.value = digits;
+    var add = addedFor(d, kind);          // «+ Запись», попавшие в эту строку
+    var srv = serverVal(d, kind);
+    if (digits === '') {
+      dropOverride(d, kind);              // очистка = вернуться к данным сервера
+    } else {
+      // введённое = итог ячейки (сервер/правка + добавленные) → правка = введённое − добавленные
+      var base = Math.max(0, (parseInt(digits, 10) || 0) - add);
+      if (srv != null && base === srv) dropOverride(d, kind);
+      else setOverride(d, kind, base);
+    }
+    saveManual();
+    refreshRow(d);
+    refreshKpis();
+  }
+  function cellResync(inp) {
+    var r = effRow(inp.getAttribute('data-date'));
+    if (!r) return;
+    var v = inp.getAttribute('data-kind') === 'new' ? r.bookingsNew : r.bookingsOld;
+    inp.value = v == null ? '' : v;
+  }
+  function refreshRow(date) {
+    var r = effRow(date);
+    if (!r) return;
+    var sumEl = els.content.querySelector('td[data-sum][data-date="' + date + '"]');
+    if (sumEl) sumEl.textContent = r.bookings == null ? '—' : fmt(r.bookings);
+    var kEl = els.content.querySelector('td[data-k2z][data-date="' + date + '"]');
+    if (kEl) kEl.textContent = (r.contacts || 0) > 0 && r.bookings != null ? pct(r.bookings / r.contacts) : '—';
+    ['old', 'new'].forEach(function (kind) {
+      var td = els.content.querySelector('td[data-bktd="' + kind + '"][data-date="' + date + '"]');
+      if (td) td.classList.toggle('manual', isManual(date, kind));
+    });
+  }
+  function refreshKpis() {
+    if (!lastData) return;
+    var rows = sortedRows(lastData);
+    var eff = effRows(rows);
+    var period = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
+    var byLabel = {};
+    kpis(eff, period).forEach(function (k) { byLabel[k.label] = k; });
+    var cards = els.content.querySelectorAll('.kpi[data-kpi]');
+    for (var i = 0; i < cards.length; i++) {
+      var k = byLabel[cards[i].getAttribute('data-kpi')];
+      if (!k) continue;
+      var val = cards[i].querySelector('.kpi-value');
+      if (val) {
+        val.textContent = k.value;
+        val.className = 'kpi-value' + (k.value.length > 6 ? ' small' : '');
+      }
+      var subEl = cards[i].querySelector('.kpi-sub');
+      if (subEl) fillSub(subEl, k, eff);
+    }
+  }
+  function wireAddForm(form) {
+    var bd = form.querySelector('#add-bd');
+    var sd = form.querySelector('#add-sd');
+    var q = form.querySelector('#add-q');
+    bd.value = todayISO();
+    var type = 'new';
+    var seg = form.querySelector('.seg');
+    seg.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      type = b.getAttribute('data-t');
+      var bs = seg.querySelectorAll('button');
+      for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i] === b);
+    });
+    q.addEventListener('input', function () {
+      var v = q.value.replace(/\D/g, '');
+      if (v !== q.value) q.value = v;
+    });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var statusEl = document.getElementById('add-status');
+      if (!bd.value) {
+        lastStatus = 'Укажите дату брони';
+        if (statusEl) { statusEl.textContent = lastStatus; statusEl.classList.add('on'); }
+        bd.focus();
+        return;
+      }
+      var qty = Math.max(1, parseInt(q.value, 10) || 1);
+      var sdVal = sd.value || null;
+      manual.adds.push({ bd: bd.value, sd: sdVal, q: qty, t: type });
+      saveManual();
+      lastStatus = 'Добавлено: ' + qty + ' × ' + (type === 'old' ? 'старый' : 'новый') +
+        ', бронь ' + ruDate(bd.value) + (sdVal ? ', сеанс ' + ruDate(sdVal) : ', сеанс не указан');
+      var y = window.scrollY || 0;
+      render(lastData);
+      window.scrollTo(0, y);
+    });
+  }
+  function wireReset(bar) {
+    bar.querySelector('#reset-manual').addEventListener('click', function () {
+      if (!window.confirm('Сбросить все ручные значения (правки ячеек и «+ Запись»)?')) return;
+      manual = { cells: {}, adds: [] };
+      try { localStorage.removeItem(LS_KEY); } catch (err) {}
+      lastStatus = 'Ручные значения сброшены — показаны данные сервера';
+      var y = window.scrollY || 0;
+      render(lastData);
+      window.scrollTo(0, y);
+    });
+  }
+
   function show() {
     els.lock.style.display = 'none';
     els.unlocking.classList.remove('show');
@@ -772,7 +1128,7 @@ window.AvitoUI = (function () {
     window.scrollTo(0, 0);
   }
 
-  function init(elements) { els = elements; }
+  function init(elements) { els = elements; loadManual(); }
   return { init: init, render: render };
 })();
 </script>
