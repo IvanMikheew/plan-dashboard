@@ -60,14 +60,14 @@
   f.src = '/avito.html';
   document.body.appendChild(f);
 
-  f.addEventListener('load', function () {
-    try { run(); } catch (e) { R.fail.push('ИСКЛЮЧЕНИЕ: ' + ((e && e.stack) || e)); }
+  f.addEventListener('load', async function () {
+    try { await run(); } catch (e) { R.fail.push('ИСКЛЮЧЕНИЕ: ' + ((e && e.stack) || e)); }
     R.info.pageErrors = errors;
     document.getElementById('report').textContent = JSON.stringify(R, null, 1);
     document.title = 'DONE';
   });
 
-  function run() {
+  async function run() {
     var cw = f.contentWindow, cd = cw.document;
     ok('AvitoUI загружен', typeof cw.AvitoUI === 'object' && typeof cw.AvitoUI.render === 'function');
     cw.addEventListener('error', function (e) { errors.push('iframe: ' + e.message); });
@@ -359,6 +359,85 @@
     eq('R3: смена фильтра → стр. 1', pagerInfo(), 'Стр. 1 из 1');
     eq('R3: под фильтром «7 дней» — 5 строк', tblRows(), 5);
     clickPreset('all');
+
+    // ================= TASK-4: график =====================================
+    function chartAttr(name) {
+      var c = cd.getElementById('chart');
+      return c ? c.getAttribute(name) : null;
+    }
+    function legendText() {
+      var l = cd.querySelector('.legend');
+      return l ? l.textContent : '';
+    }
+    function chartTitle() {
+      var h = cd.querySelector('.card h2');
+      return h ? h.textContent : '';
+    }
+    // подсчёт отрисовок (clearRect — один на drawChart) и маркеров (setLineDash)
+    var proto = cw.CanvasRenderingContext2D.prototype;
+    var origClear = proto.clearRect, origDash = proto.setLineDash;
+    var drawCount = 0, dashCount = 0;
+    proto.clearRect = function () { drawCount++; return origClear.apply(this, arguments); };
+    proto.setLineDash = function () { dashCount++; return origDash.apply(this, arguments); };
+
+    cw.AvitoUI.render(F.main());           // 37 дней
+    eq('R4: 37 дней → дневной режим', chartAttr('data-mode'), 'day');
+    eq('R4: 37 дней → 37 столбцов', chartAttr('data-points'), '37');
+    ok('R4: легенда со SMA7 в дневном режиме', legendText().indexOf('SMA7') >= 0, legendText());
+
+    clickPreset('7');
+    eq('R4: «7 дней» → 7 столбцов', chartAttr('data-points'), '7');
+    clickPreset('all');
+
+    cw.AvitoUI.render(F.pagi(90));         // ровно 90 дней — дни
+    eq('R4: 90 дней → дневной режим', chartAttr('data-mode'), 'day');
+    eq('R4: 90 дней → 90 столбцов', chartAttr('data-points'), '90');
+
+    // 180 дней → ISO-недельные бакеты
+    var fix180 = F.pagi(180);
+    cw.AvitoUI.render(fix180);
+    eq('R4: 180 дней → недельный режим', chartAttr('data-mode'), 'week');
+    function wstart(d) {
+      var day = new Date(Date.parse(d + 'T00:00:00Z')).getUTCDay();
+      return F.addDays(d, day === 0 ? -6 : 1 - day);
+    }
+    var b180 = sorted(fix180);
+    var nWeeks = 0;
+    for (var wI = wstart(b180[0].date); wI <= wstart(b180[b180.length - 1].date); wI = F.addDays(wI, 7)) {
+      nWeeks++;
+    }
+    eq('R4: столбцов = числу ISO-недель (' + nWeeks + ')', chartAttr('data-points'), String(nWeeks));
+    ok('R4: в недельном режиме нет SMA7 в легенде', legendText().indexOf('SMA7') < 0, legendText());
+    ok('R4: легенда «за неделю»', legendText().indexOf('за неделю') >= 0, legendText());
+    ok('R4: заголовок «недельная агрегация»',
+      chartTitle().indexOf('недельная агрегация') >= 0, chartTitle());
+
+    // маркеры правок — только внутри диапазона
+    cw.AvitoUI.render(F.main());           // правка на a-3, диапазон = все данные
+    dashCount = 0;
+    cw.AvitoUI.render(F.main());
+    ok('R4: правка внутри диапазона → маркер', dashCount > 0, String(dashCount));
+    dashCount = 0;
+    applyCustom(F.addDays(a, -10), F.addDays(a, -5));   // a-3 не входит
+    eq('R4: правка вне диапазона → маркеров нет', dashCount, 0);
+    dashCount = 0;
+    applyCustom(F.addDays(a, -5), a);                   // a-3 входит
+    ok('R4: правка в диапазоне → маркер есть', dashCount > 0, String(dashCount));
+    clickPreset('all');
+
+    // ресайз (вращение телефона): перерисовка не чаще 1 раза в 150 мс
+    // (ширины ниже лимита #content 740px, чтобы ширина графика реально менялась)
+    drawCount = 0;
+    for (var wi = 500; wi <= 640; wi += 20) {
+      f.style.width = wi + 'px';
+      await new Promise(function (res) { setTimeout(res, 25); });
+    }
+    await new Promise(function (res) { setTimeout(res, 400); });
+    var draws = drawCount;
+    ok('R4: ресайз — перерисовок ' + draws + ' (1..4) при 8 изменениях ширины',
+      draws >= 1 && draws <= 4, String(draws));
+    f.style.width = '780px';
+    await new Promise(function (res) { setTimeout(res, 200); });
   }
 })();
 </script>

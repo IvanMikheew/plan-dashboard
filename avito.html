@@ -920,6 +920,59 @@ window.AvitoUI = (function () {
     return out;
   }
 
+  // ISO-неделя: понедельник недели, содержащей дату (ADR-0004, Пн–Вс)
+  function isoWeekStart(dateStr) {
+    var day = new Date(Date.parse(dateStr + 'T00:00:00Z')).getUTCDay(); // 0=Вс
+    return addDays(dateStr, day === 0 ? -6 : 1 - day);
+  }
+  // дневные бакеты: значение + доли (SMA7 — только в дневном режиме)
+  function dayBuckets(rows, from, to, byDate, smaByDate) {
+    var out = [];
+    for (var d = from; d <= to; d = addDays(d, 1)) {
+      var r = byDate[d] || null;
+      var s = smaByDate[d] || { ctr: null, p2c: null };
+      out.push({ label: d, views: r ? (r.views || 0) : 0, ctr: s.ctr, p2c: s.p2c });
+    }
+    return out;
+  }
+  // недельные бакеты: суммы за ISO-неделю, линии = доли за неделю, SMA нет
+  function weekBuckets(rows, from, to) {
+    var start = isoWeekStart(from), end = isoWeekStart(to);
+    var order = [], byW = {};
+    for (var w = start; w <= end; w = addDays(w, 7)) {
+      order.push(w);
+      byW[w] = { label: w, views: 0, imp: 0, con: 0, ctr: null, p2c: null };
+    }
+    rows.forEach(function (r) {
+      var b = byW[isoWeekStart(r.date)];
+      if (!b) return;
+      b.views += r.views || 0;
+      b.imp += r.impressions || 0;
+      b.con += r.contacts || 0;
+    });
+    order.forEach(function (w) {
+      var b = byW[w];
+      b.ctr = b.imp ? b.views / b.imp : null;
+      b.p2c = b.views ? b.con / b.views : null;
+    });
+    return order.map(function (w) { return byW[w]; });
+  }
+
+  // перерисовка при ресайзе — не чаще 1 раза в 150 мс (throttle + хвост):
+  // при вращении/перетаскивании картинка обновляется и не «мигает» (R4)
+  var chartLastDraw = 0, chartTimer = null;
+  function scheduleChartDraw(rows, edits, bounds) {
+    var now = Date.now();
+    var wait = 150 - (now - chartLastDraw);
+    if (wait <= 0) { chartLastDraw = now; drawChart(rows, edits, bounds); return; }
+    if (chartTimer) return;
+    chartTimer = setTimeout(function () {
+      chartTimer = null;
+      chartLastDraw = Date.now();
+      drawChart(rows, edits, bounds);
+    }, wait);
+  }
+
   function drawChart(rows, edits, bounds) {
     var canvas = document.getElementById('chart');
     if (!canvas) return;
@@ -946,43 +999,48 @@ window.AvitoUI = (function () {
     if (!rows.length || !bounds) return;
     var startDate = bounds[0];
     var lastDate = bounds[1];
+    var nDays = dayDiff(startDate, lastDate) + 1;
+    var weekly = nDays > 90;             // >90 дней — ISO-недели (ADR-0004)
 
     var byDate = {};
     rows.forEach(function (r) { byDate[r.date] = r; });
-    var ctrSma = sma7(rows, 'views');    // ниже — пересчёт в «Просмотры %»
-    var p2cSma = sma7(rows, 'contacts');
     var smaByDate = {};
-    rows.forEach(function (r, i) {
-      var ctr = null, p2c = null;
-      if (ctrSma[i] != null && r.impressions) {
-        // SMA7 просмотров ÷ SMA7 показов — честнее, чем среднее дневных «Просмотры %»
-        var sImp = 0, sVis = 0, sCon = 0;
-        for (var j = i - 6; j <= i; j++) { sImp += rows[j].impressions || 0; sVis += rows[j].views || 0; sCon += rows[j].contacts || 0; }
-        ctr = sImp ? sVis / sImp : null;
-        p2c = sVis ? sCon / sVis : null;
-      }
-      smaByDate[r.date] = { ctr: ctr, p2c: p2c };
-    });
+    if (!weekly) {
+      var ctrSma = sma7(rows, 'views');    // ниже — пересчёт в «Просмотры %»
+      rows.forEach(function (r, i) {
+        var ctr = null, p2c = null;
+        if (ctrSma[i] != null && r.impressions) {
+          // SMA7 просмотров ÷ SMA7 показов — честнее, чем среднее дневных «Просмотры %»
+          var sImp = 0, sVis = 0, sCon = 0;
+          for (var j = i - 6; j <= i; j++) { sImp += rows[j].impressions || 0; sVis += rows[j].views || 0; sCon += rows[j].contacts || 0; }
+          ctr = sImp ? sVis / sImp : null;
+          p2c = sVis ? sCon / sVis : null;
+        }
+        smaByDate[r.date] = { ctr: ctr, p2c: p2c };
+      });
+    }
+
+    var buckets = weekly ? weekBuckets(rows, startDate, lastDate)
+      : dayBuckets(rows, startDate, lastDate, byDate, smaByDate);
+    var n = buckets.length;
+    // метаданные для тестов: окно, режим, число столбцов
+    canvas.setAttribute('data-days', String(nDays));
+    canvas.setAttribute('data-mode', weekly ? 'week' : 'day');
+    canvas.setAttribute('data-points', String(n));
+    if (!n) return;
 
     var padL = 46, padR = 46, padT = 18, padB = 30;
     var plotW = W - padL - padR, plotH = H - padT - padB;
-    var nDays = dayDiff(startDate, lastDate) + 1;
-    canvas.setAttribute('data-days', String(nDays));   // метаданные для тестов
-    var step = plotW / nDays;
-    var xOf = function (date) { return padL + (dayDiff(startDate, date) + 0.5) * step; };
+    var step = plotW / n;
+    var xOf = function (i) { return padL + (i + 0.5) * step; };
 
     // оси-значения
     var maxViews = 1;
-    var date = startDate;
-    for (var i = 0; i < nDays; i++, date = addDays(date, 1)) {
-      var r = byDate[date];
-      if (r) maxViews = Math.max(maxViews, r.views || 0);
-    }
     var maxRate = 0.05;
-    Object.keys(smaByDate).forEach(function (d) {
-      var s = smaByDate[d];
-      if (s.ctr != null) maxRate = Math.max(maxRate, s.ctr);
-      if (s.p2c != null) maxRate = Math.max(maxRate, s.p2c);
+    buckets.forEach(function (b) {
+      maxViews = Math.max(maxViews, b.views || 0);
+      if (b.ctr != null) maxRate = Math.max(maxRate, b.ctr);
+      if (b.p2c != null) maxRate = Math.max(maxRate, b.p2c);
     });
     maxRate = Math.ceil(maxRate * 20) / 20;          // кратно 5 пп
     if (maxRate <= 0) maxRate = 0.05;
@@ -1009,53 +1067,56 @@ window.AvitoUI = (function () {
       ctx.fillText(pct(maxRate * t / ticks, 0), W - padR + 6, y);
     }
 
-    // даты по оси X (каждые 4 дня)
+    // подписи оси X: дни — каждые 4 дня; недели — даты начала недель
     ctx.textAlign = 'center';
-    date = startDate;
-    for (var i2 = 0; i2 < nDays; i2++, date = addDays(date, 1)) {
-      if (i2 % 4 === 0 || date === lastDate) {
-        ctx.fillText(ruDate(date), xOf(date), H - padB + 14);
+    var labelEvery = weekly ? Math.max(1, Math.ceil(n / 8)) : 4;
+    buckets.forEach(function (b, i) {
+      if (i % labelEvery === 0 || i === n - 1) {
+        ctx.fillText(ruDate(b.label), xOf(i), H - padB + 14);
       }
-    }
+    });
 
-    // столбцы: просмотры
-    var bw = Math.max(3, Math.min(22, step * 0.62));
-    date = startDate;
-    for (var i3 = 0; i3 < nDays; i3++, date = addDays(date, 1)) {
-      var row = byDate[date];
-      if (!row || !row.views) continue;
-      var x = xOf(date) - bw / 2;
-      var y = yV(row.views);
+    // столбцы: просмотры дня или недели
+    var bw = Math.max(3, Math.min(weekly ? 34 : 22, step * 0.62));
+    buckets.forEach(function (b, i) {
+      if (!b.views) return;
+      var x = xOf(i) - bw / 2;
+      var y = yV(b.views);
       ctx.fillStyle = C.accent;
       ctx.globalAlpha = 0.85;
       ctx.fillRect(x, y, bw, padT + plotH - y);
       ctx.globalAlpha = 1;
-    }
+    });
 
-    // линии: «Просмотры %» (SMA7) и просмотр→контакт (SMA7), правая ось
+    // линии долей: дни — SMA7, недели — значения за неделю
     function drawLine(key, color) {
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.lineJoin = 'round';
       var started = false;
       ctx.beginPath();
-      date = startDate;
-      for (var i = 0; i < nDays; i++, date = addDays(date, 1)) {
-        var s = smaByDate[date];
-        if (!s || s[key] == null) { started = false; continue; }
-        var x = xOf(date), y = yR(s[key]);
+      buckets.forEach(function (b, i) {
+        if (b[key] == null) { started = false; return; }
+        var x = xOf(i), y = yR(b[key]);
         if (!started) { ctx.moveTo(x, y); started = true; }
         else ctx.lineTo(x, y);
-      }
+      });
       ctx.stroke();
     }
     drawLine('ctr', C.chart2);
     drawLine('p2c', C.accent);
 
-    // пунктиры — даты правок
+    // пунктиры — даты правок только внутри диапазона (иначе маркера нет)
     (edits || []).forEach(function (ed, idx) {
-      if (dayDiff(startDate, ed) < 0 || dayDiff(ed, lastDate) < 0) return;
-      var x = Math.round(xOf(ed)) + 0.5;
+      var i = -1, k;
+      if (weekly) {
+        var ws = isoWeekStart(ed);
+        for (k = 0; k < n; k++) if (buckets[k].label === ws) { i = k; break; }
+      } else {
+        i = dayDiff(startDate, ed);
+      }
+      if (i < 0 || i >= n) return;
+      var x = Math.round(xOf(i)) + 0.5;
       ctx.save();
       ctx.strokeStyle = C.muted;
       ctx.setLineDash([5, 4]);
@@ -1198,17 +1259,19 @@ window.AvitoUI = (function () {
     });
     content.appendChild(grid);
 
-    // 3) график — окно = активный период фильтра (R2)
+    // 3) график — окно = активный период фильтра (R2); >90 дней — ISO-недели
+    var chartWeekly = dayDiff(period[0], period[1]) + 1 > 90;
     var chartCard = document.createElement('div');
     chartCard.className = 'card';
     chartCard.innerHTML =
-      '<h2>' + plabel + ' — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», SMA7</h2>' +
+      '<h2>' + plabel + ' — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», ' +
+      (chartWeekly ? 'недельная агрегация (Пн–Вс)' : 'SMA7') + '</h2>' +
       '<div class="chart-wrap"><canvas id="chart" role="img" aria-label="График статистики: ' +
       plabel + '"></canvas></div>' +
       '<div class="legend">' +
       '<span><i class="lg bar"></i>просмотры</span>' +
-      '<span><i class="lg l2"></i>Просмотры % (SMA7)</span>' +
-      '<span><i class="lg l1"></i>просмотр → контакт (SMA7)</span>' +
+      '<span><i class="lg l2"></i>Просмотры % ' + (chartWeekly ? '(за неделю)' : '(SMA7)') + '</span>' +
+      '<span><i class="lg l1"></i>просмотр → контакт ' + (chartWeekly ? '(за неделю)' : '(SMA7)') + '</span>' +
       '<span><i class="lg edit"></i>даты правок</span>' +
       '</div>';
     content.appendChild(chartCard);
@@ -1274,10 +1337,13 @@ window.AvitoUI = (function () {
     els.date.textContent = 'данные: ' + ruDate(period[0]) + ' — ' + ruDate(period[1]);
 
     show();
-    // отрисовка и перерисовка при ресайзе (дебаунс — TASK-4)
+    // отрисовка; при ресайзе — throttle+хвост 150 мс (R4, телефон)
     drawChart(active, data.edits || [], period);
     if (window.__avitoRO) window.__avitoRO.disconnect();
-    window.__avitoRO = new ResizeObserver(function () { drawChart(active, data.edits || [], period); });
+    if (chartTimer) { clearTimeout(chartTimer); chartTimer = null; }
+    window.__avitoRO = new ResizeObserver(function () {
+      scheduleChartDraw(active, data.edits || [], period);
+    });
     window.__avitoRO.observe(chartCard);
   }
 
