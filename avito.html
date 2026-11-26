@@ -29,10 +29,11 @@
       версией формата): { cells: {дата: {new, old}},   // правки ячеек таблицы
                          adds: [{bd, sd, q, t}] }      // «+ Запись»: bd — дата
       брони, sd — дата сеанса (может быть null), q — количество, t — new|old.
-   5) ПРАВИЛО ДАТ: дата брони ≠ дата сеанса. Конверсии (KPI «Контакт → запись»)
-      считаются по ДАТЕ БРОНИ; строка таблицы = дата СЕАНСА, если указана,
-      иначе дата брони. У серверных rows даты брони нет (календарь — по дате
-      сеанса); в будущей CRM у записи будут ОБЕ даты.
+   5) ПРАВИЛО ДАТ: дата брони ≠ дата сеанса. Конверсия (KPI «Контакт → запись»
+      = НОВЫЕ записи ÷ контакты, ADR-0007) считается по ДАТЕ БРОНИ; строка
+      таблицы = дата СЕАНСА, если указана, иначе дата брони. У серверных rows
+      даты брони нет (календарь — по дате сеанса); в будущей CRM у записи будут
+      ОБЕ даты.
    6) Ошибка GCM tag → «Неверный пароль»; нет файла → «Не удалось загрузить».
   ==========================================================================
 -->
@@ -252,6 +253,12 @@
     font-variant-numeric: tabular-nums;
   }
   .kpi-value.small { font-size: 24px; }
+  .kpi-period {
+    font-size: 12px; font-weight: 700; color: var(--accent);
+    margin-top: 2px; font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  @media (max-width: 559px) { .kpi-period { white-space: normal; } }
   .kpi-sub {
     font-size: 12.5px; color: var(--muted); margin-top: 3px;
     font-variant-numeric: tabular-nums;
@@ -572,59 +579,114 @@ window.AvitoUI = (function () {
     });
     return d > 0 ? n / d : null;
   }
-  function kpis(rows, period) {
-    var imp = sum(rows, 'impressions') || 0;
-    var vis = sum(rows, 'views') || 0;
-    var con = sum(rows, 'contacts') || 0;
-    var bk = sum(rows, 'bookings');
-    var bkw = sum(rows, 'bookingsNew');
-    var bko = sum(rows, 'bookingsOld');
-    // «Контакт → запись» = записи ÷ контакты за период; записи — по ДАТЕ БРОНИ:
-    // база строк (сервер/правки ячеек — даты брони нет, считаем по строкам периода)
-    // + добавленные «+ Запись» с датой брони внутри периода.
-    var sBase = 0, hasBase = false, sAdd = 0;
+  // ==== СЕЛЕКТОРЫ КАЛЕНДАРНЫХ ОКОН (чистые функции, без DOM) ============
+  // ADR-0001: окна считаются по календарным датам, НЕ по индексам строк —
+  // день без строки = вклад 0/null, пропуски дат не сдвигают границы окон.
+  function boundsOf(rows) {          // [мин, макс] даты в наборе (или null)
+    var min = null, max = null;
     rows.forEach(function (r) {
-      if (r.baseNew != null) { sBase += r.baseNew; hasBase = true; }
-      if (r.baseOld != null) { sBase += r.baseOld; hasBase = true; }
+      if (min === null || r.date < min) min = r.date;
+      if (max === null || r.date > max) max = r.date;
     });
-    if (period) {
-      manual.adds.forEach(function (a) {
-        if (a.bd && a.bd >= period[0] && a.bd <= period[1]) sAdd += a.q || 0;
-      });
-    }
-    var num = (hasBase || sAdd > 0) ? sBase + sAdd : null;
-    var k2z = (num != null && con > 0) ? num / con : null;
-    return [
-      { label: 'Показы',      type: 'count', sumKey: 'impressions', value: fmt(imp), raw: imp },
-      { label: 'Просмотры',   type: 'count', sumKey: 'views',       value: fmt(vis), raw: vis },
-      { label: 'Просмотры %', type: 'rate',  nKey: 'views', dKey: 'impressions',
-        value: pct(vis && imp ? vis / imp : null), raw: imp ? vis / imp : null },
-      { label: 'Контакты',    type: 'count', sumKey: 'contacts',    value: fmt(con), raw: con },
-      { label: 'Просмотр → контакт', type: 'rate', nKey: 'contacts', dKey: 'views',
-        value: pct(vis && con ? con / vis : null), raw: vis && con ? con / vis : null },
-      { label: 'Записи',      type: 'count', sumKey: 'bookings',
-        value: bk == null ? '—' : fmt(bk), raw: bk, sub: bk == null ? 'нет данных' : null },
-      { label: 'Записи новые', type: 'count', sumKey: 'bookingsNew',
-        value: bkw == null ? '—' : fmt(bkw), raw: bkw, sub: 'за период' },
-      { label: 'Записи старые', type: 'count', sumKey: 'bookingsOld',
-        value: bko == null ? '—' : fmt(bko), raw: bko, sub: 'за период' },
-      { label: 'Контакт → запись', type: 'rate', nKey: 'bookings', dKey: 'contacts',
-        value: pct(k2z), raw: k2z, sub: num == null ? 'нет данных' : null }
-    ];
+    return min === null ? null : [min, max];
   }
-  // дельта: последние 7 дней к предыдущим (окно ≥3 дней); ключи — из kpi
-  function delta7(rows, kpi) {
-    if (rows.length < 6) return null;
-    var last = rows.slice(-7);
-    var prev = rows.slice(-14, -7);
-    if (prev.length < 3) return null;
-    function val(rs) {
-      if (kpi.type === 'rate') return rate(rs, kpi.nKey, kpi.dKey);
-      return sum(rs, kpi.sumKey);
-    }
-    var a = val(prev), b = val(last);
-    if (a == null || b == null || !a) return null;
-    return (b - a) / a;
+  // якорь = min(последняя дата в данных, вчера) — «последний полный день»
+  function rangeAnchor(rows) {
+    var b = boundsOf(rows);
+    if (!b) return null;
+    var yest = addDays(todayISO(), -1);
+    return b[1] < yest ? b[1] : yest;
+  }
+  // строки с датой в [from..to] включительно
+  function windowRows(rows, from, to) {
+    return rows.filter(function (r) { return r.date >= from && r.date <= to; });
+  }
+  // окна «7 дней» [anchor−6..anchor] и «прошлая неделя» [anchor−13..anchor−7]
+  function windows7(rows) {
+    var a = rangeAnchor(rows);
+    if (!a) return null;
+    return {
+      anchor: a,
+      cur: windowRows(rows, addDays(a, -6), a),
+      prev: windowRows(rows, addDays(a, -13), addDays(a, -7)),
+      curFrom: addDays(a, -6), curTo: a,
+      prevFrom: addDays(a, -13), prevTo: addDays(a, -7)
+    };
+  }
+  // агрегат окон: agg(rows) → значение; возвращает {value7, valuePrev7, delta}
+  // (delta = (текущее − прошлое) / прошлое; нет прошлого окна/нуль → null)
+  function agg7(rows, agg) {
+    var w = windows7(rows);
+    if (!w) return { value7: null, valuePrev7: null, delta: null, windows: null };
+    var v = agg(w.cur), p = agg(w.prev);
+    var d = (v == null || p == null || !p) ? null : (v - p) / p;
+    return { value7: v, valuePrev7: p, delta: d, windows: w };
+  }
+
+  // состояние страницы (ADR-0002): фильтр периода + страница таблицы
+  var state = { preset: 'all', range: null, page: 1 };
+
+  // ==== МЕТРИКИ KPI (чистые): (rows, bounds) → сырое значение или null ====
+  function mSum(key) {
+    return function (rs) { return sum(rs, key); };
+  }
+  function mRate(nKey, dKey) {
+    return function (rs) { return rate(rs, nKey, dKey); };
+  }
+  // «Контакт → запись» = НОВЫЕ записи ÷ контакты; записи — по ДАТЕ БРОНИ
+  // (решение владельца 2026-11-26, ADR-0007: старые = возвраты, не конверсия):
+  // база строк (у серверных строк даты брони нет) + «+ Запись» t=new с bd в bounds.
+  // 0 новых записей или нет контактов → null → «—».
+  function mK2Z() {
+    return function (rs, bounds) {
+      var sBase = 0, hasBase = false, sAdd = 0;
+      rs.forEach(function (r) {
+        if (r.baseNew != null) { sBase += r.baseNew; hasBase = true; }
+      });
+      if (bounds) {
+        manual.adds.forEach(function (a) {
+          if (a.t === 'new' && a.bd && a.bd >= bounds[0] && a.bd <= bounds[1]) sAdd += a.q || 0;
+        });
+      }
+      var con = sum(rs, 'contacts') || 0;
+      if (!(hasBase || sAdd > 0)) return null;
+      var num = sBase + sAdd;
+      if (!num || !con) return null;
+      return num / con;
+    };
+  }
+  // zero: суммы без данных показываем «0» (как раньше), иначе «—»
+  var KPIS = [
+    { label: 'Показы',      m: mSum('impressions'), count: true, zero: true },
+    { label: 'Просмотры',   m: mSum('views'),       count: true, zero: true },
+    { label: 'Просмотры %', m: mRate('views', 'impressions') },
+    { label: 'Контакты',    m: mSum('contacts'),    count: true, zero: true },
+    { label: 'Просмотр → контакт', m: mRate('contacts', 'views') },
+    { label: 'Записи',      m: mSum('bookings'),    count: true },
+    { label: 'Записи новые', m: mSum('bookingsNew'), count: true },
+    { label: 'Записи старые', m: mSum('bookingsOld'), count: true },
+    { label: 'Контакт → запись', m: mK2Z() }
+  ];
+  function kpiDisplay(spec, raw) {
+    if (raw == null) return spec.zero ? fmt(0) : '—';
+    return spec.count ? fmt(raw) : pct(raw);
+  }
+  // плашки за активный период (rows = строки периода, bounds = его даты)
+  function kpis(rows, bounds) {
+    return KPIS.map(function (spec) {
+      var raw = spec.m(rows, bounds);
+      return { label: spec.label, value: kpiDisplay(spec, raw), raw: raw, spec: spec };
+    });
+  }
+  // метка периода под значением плашки (TASK-2: учитывает фильтр)
+  function periodLabel(rows) {
+    var b = boundsOf(rows);
+    if (!b) return 'нет данных';
+    return 'за всё время (' + (dayDiff(b[0], b[1]) + 1) + ' дн.)';
+  }
+  // активный период равен окну «7 дней» → X в 7-дневной строке не дублируем
+  function isSevenWindow() {
+    return state.preset === '7';
   }
 
   // ---- строка-вывод (тренд) ---------------------------------------------
@@ -844,10 +906,16 @@ window.AvitoUI = (function () {
     }
     content.appendChild(trend);
 
-    // 2) KPI-плашки (9)
+    // 2) KPI-плашки (9): значение за активный период, метка периода отдельной
+    //    строкой и 7-дневная строка с дельтой к прошлой неделе (SPEC R1)
+    var active = eff;                 // TASK-2: eff, пропущенный через фильтр
+    var activePeriod = period;
+    var w7 = windows7(eff);
+    var hideX = isSevenWindow();
+    var plabel = periodLabel(active);
     var grid = document.createElement('div');
     grid.className = 'kpi-grid';
-    kpis(eff, period).forEach(function (k) {
+    kpis(active, activePeriod).forEach(function (k) {
       var card = document.createElement('div');
       card.className = 'kpi';
       card.setAttribute('data-kpi', k.label);
@@ -857,10 +925,13 @@ window.AvitoUI = (function () {
       var val = document.createElement('div');
       val.className = 'kpi-value' + (k.value.length > 6 ? ' small' : '');
       val.textContent = k.value;
+      var per = document.createElement('div');
+      per.className = 'kpi-period';
+      per.textContent = plabel;
       var subEl = document.createElement('div');
       subEl.className = 'kpi-sub';
-      fillSub(subEl, k, eff);
-      card.appendChild(lab); card.appendChild(val); card.appendChild(subEl);
+      fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: period });
+      card.appendChild(lab); card.appendChild(val); card.appendChild(per); card.appendChild(subEl);
       grid.appendChild(card);
     });
     content.appendChild(grid);
@@ -928,7 +999,9 @@ window.AvitoUI = (function () {
     eff.slice().reverse().forEach(function (r) {
       var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
       var p2c = r.views ? (r.contacts || 0) / r.views : null;
-      var k2z = (r.contacts || 0) > 0 && r.bookings != null ? pct(r.bookings / r.contacts) : '—';
+      // К→З = записи_новые_дня ÷ контакты_дня (ADR-0007); пусто/0 → «—»
+      var k2z = (r.contacts || 0) > 0 && r.bookingsNew != null && r.bookingsNew > 0 ?
+        pct(r.bookingsNew / r.contacts) : '—';
       html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
         '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
         '<td>' + fmt(r.impressions || 0) + '</td>' +
@@ -983,18 +1056,29 @@ window.AvitoUI = (function () {
     for (var i = 0; i < rs.length; i++) if (rs[i].date === date) return rs[i];
     return null;
   }
-  function fillSub(subEl, k, rows) {
-    if (k.sub) { subEl.textContent = k.sub; return; }
-    var d = delta7(rows, k);
-    if (d == null) {
-      subEl.textContent = 'за период (' + rows.length + ' дн.)';
+  // подпись под значением: метка периода — отдельной строкой (kpi-period),
+  // ниже — 7-дневная строка «за 7 дней: X · к прошлой нед. ±Y%» (SPEC R1)
+  function fillSub(subEl, k, ctx) {
+    var w = ctx && ctx.w7;
+    if (k.raw == null || !w || !w.cur.length) { subEl.textContent = 'нет данных'; return; }
+    var x = k.spec.m(w.cur, [w.curFrom, w.curTo]);
+    if (x == null) { subEl.textContent = 'нет данных'; return; }
+    var xs = k.spec.count ? fmt(x) : pct(x);
+    // дельта — только когда прошлое окно целиком покрыто данными
+    // («меньше 14 дней данных» → без дельты, критерий TASK-1)
+    var prevOk = ctx.dataBounds && ctx.dataBounds[0] <= w.prevFrom;
+    var p = prevOk ? k.spec.m(w.prev, [w.prevFrom, w.prevTo]) : null;
+    var d = (p == null || !p) ? null : (x - p) / p;
+    var lead = (ctx && ctx.hideX) ? '' : 'за 7 дней: ' + xs;
+    if (d != null) {
+      subEl.textContent = (lead ? lead + ' · ' : '') + 'к прошлой нед. ';
+      var sp = document.createElement('span');
+      sp.className = 'kpi-delta ' + (d > 0.005 ? 'up' : d < -0.005 ? 'down' : '');
+      sp.textContent = (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
+      subEl.appendChild(sp);
       return;
     }
-    subEl.innerHTML = 'за 7 дней · к прошлой нед. ';
-    var sp = document.createElement('span');
-    sp.className = 'kpi-delta ' + (d > 0.005 ? 'up' : d < -0.005 ? 'down' : '');
-    sp.textContent = (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
-    subEl.appendChild(sp);
+    subEl.textContent = lead || ('за 7 дней: ' + xs);
   }
   function bkCell(r, kind) {
     var v = kind === 'new' ? r.bookingsNew : r.bookingsOld;
@@ -1044,7 +1128,8 @@ window.AvitoUI = (function () {
     var sumEl = els.content.querySelector('td[data-sum][data-date="' + date + '"]');
     if (sumEl) sumEl.textContent = r.bookings == null ? '—' : fmt(r.bookings);
     var kEl = els.content.querySelector('td[data-k2z][data-date="' + date + '"]');
-    if (kEl) kEl.textContent = (r.contacts || 0) > 0 && r.bookings != null ? pct(r.bookings / r.contacts) : '—';
+    if (kEl) kEl.textContent = (r.contacts || 0) > 0 && r.bookingsNew != null && r.bookingsNew > 0 ?
+      pct(r.bookingsNew / r.contacts) : '—';
     ['old', 'new'].forEach(function (kind) {
       var td = els.content.querySelector('td[data-bktd="' + kind + '"][data-date="' + date + '"]');
       if (td) td.classList.toggle('manual', isManual(date, kind));
@@ -1055,6 +1140,9 @@ window.AvitoUI = (function () {
     var rows = sortedRows(lastData);
     var eff = effRows(rows);
     var period = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
+    var w7 = windows7(eff);
+    var hideX = isSevenWindow();
+    var plabel = periodLabel(eff);
     var byLabel = {};
     kpis(eff, period).forEach(function (k) { byLabel[k.label] = k; });
     var cards = els.content.querySelectorAll('.kpi[data-kpi]');
@@ -1066,8 +1154,10 @@ window.AvitoUI = (function () {
         val.textContent = k.value;
         val.className = 'kpi-value' + (k.value.length > 6 ? ' small' : '');
       }
+      var per = cards[i].querySelector('.kpi-period');
+      if (per) per.textContent = plabel;
       var subEl = cards[i].querySelector('.kpi-sub');
-      if (subEl) fillSub(subEl, k, eff);
+      if (subEl) fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: period });
     }
   }
   function wireAddForm(form) {

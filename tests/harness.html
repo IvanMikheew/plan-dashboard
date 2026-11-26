@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>harness</title>
+</head>
+<body>
+<pre id="report">RUNNING</pre>
+<script src="fixture.js"></script>
+<script>
+/*
+ * Harness приёмочных тестов дашборда (запуск):
+ *   chrome --headless=new --dump-dom --virtual-time-budget=15000 \
+ *          http://127.0.0.1:8077/tests/harness.html
+ * Отчёт — в <pre id="report"> (JSON {pass[], fail[], info{}}), title = DONE.
+ * Все ожидания считаются НЕЗАВИСИМЫМ кодом здесь (не кодом страницы).
+ */
+(function () {
+  var R = { pass: [], fail: [], info: {} };
+  function ok(name, cond, detail) {
+    (cond ? R.pass : R.fail).push(name + (cond ? '' : '  :: ' + (detail === undefined ? '' : detail)));
+  }
+  function eq(name, actual, expected) {
+    ok(name, actual === expected, 'ожидалось [' + expected + '], получено [' + actual + ']');
+  }
+  function fmt(n) { return Number(n).toLocaleString('ru-RU'); }
+  function pct(v, d) {
+    if (v === null || v === undefined || !isFinite(v)) return '—';
+    return (v * 100).toFixed(d === undefined ? 1 : d).replace('.', ',') + '%';
+  }
+
+  var F = window.AvitoFixtures;
+  var errors = [];
+  window.onerror = function (m) { errors.push(String(m)); };
+
+  // ---------- независимый пересчёт по фикстуре ----------
+  function sorted(fix) {
+    return fix.rows.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  }
+  function sumRange(rows, from, to, key) {
+    var s = 0, any = false;
+    rows.forEach(function (r) {
+      if (r.date >= from && r.date <= to && r[key] != null) { s += r[key]; any = true; }
+    });
+    return any ? s : null;
+  }
+  function rateRange(rows, from, to, nk, dk) {
+    var n = sumRange(rows, from, to, nk), d = sumRange(rows, from, to, dk);
+    return (n == null || d == null || !d) ? null : n / d;
+  }
+  function delta(x, p) { return (x == null || p == null || !p) ? null : Math.round((x - p) / p * 100); }
+  // как страница: (d > 0 ? '+' : '') + Math.round(d * 100) + '%'
+  function sdelta(x, p) {
+    var d = delta(x, p);
+    return d === null ? null : (d > 0 ? '+' : '') + d + '%';
+  }
+
+  var f = document.createElement('iframe');
+  f.style.cssText = 'width:780px;height:1100px;border:0';
+  f.src = '/avito.html';
+  document.body.appendChild(f);
+
+  f.addEventListener('load', function () {
+    try { run(); } catch (e) { R.fail.push('ИСКЛЮЧЕНИЕ: ' + ((e && e.stack) || e)); }
+    R.info.pageErrors = errors;
+    document.getElementById('report').textContent = JSON.stringify(R, null, 1);
+    document.title = 'DONE';
+  });
+
+  function run() {
+    var cw = f.contentWindow, cd = cw.document;
+    ok('AvitoUI загружен', typeof cw.AvitoUI === 'object' && typeof cw.AvitoUI.render === 'function');
+    cw.addEventListener('error', function (e) { errors.push('iframe: ' + e.message); });
+
+    function kpiCard(l) { return cd.querySelector('.kpi[data-kpi="' + l + '"]'); }
+    function kval(l) { var e = kpiCard(l); return e ? e.querySelector('.kpi-value').textContent : null; }
+    function kper(l) { var e = kpiCard(l); return e ? e.querySelector('.kpi-period').textContent : null; }
+    function ksub(l) { var e = kpiCard(l); return e ? e.querySelector('.kpi-sub').textContent : null; }
+    function contentText() { return cd.getElementById('content').textContent; }
+
+    // ================= TASK-1: окна и «за 7 дней» =======================
+    var fix = F.main();
+    cw.AvitoUI.render(fix);
+    var rows = sorted(fix);
+    var a = F.anchor();
+    var addD = F.addDays;
+    var d0 = rows[0].date, d1 = rows[rows.length - 1].date;
+
+    R.info.anchor = a;
+    R.info.range = d0 + '..' + d1 + ' (строк ' + rows.length + ')';
+
+    var totImp = sumRange(rows, d0, d1, 'impressions');            // 1967
+    var c7 = addD(a, -6), p7f = addD(a, -13), p7t = addD(a, -7);
+    var curImp = sumRange(rows, c7, a, 'impressions');             // 888
+    var prvImp = sumRange(rows, p7f, p7t, 'impressions');          // 800
+    var dImp = delta(curImp, prvImp);                              // 11
+
+    R.info.sums = { total: totImp, cur7: curImp, prev7: prvImp, deltaPct: dImp };
+
+    eq('R1: KPI Показы = 1967', kval('Показы'), fmt(1967));
+    eq('R1: метка периода «за всё время (37 дн.)»', kper('Показы'), 'за всё время (37 дн.)');
+    ok('R1: строка «за 7 дней: 888»', ksub('Показы').indexOf('за 7 дней: ' + fmt(888)) === 0, ksub('Показы'));
+    ok('R1: дельта «к прошлой нед. +11%»',
+      ksub('Показы').indexOf('к прошлой нед. +' + dImp + '%') >= 0, ksub('Показы'));
+
+    // пропуски дат: slice(-7) по индексам дал бы 1173 — окно по датам даёт 888
+    var slice7 = rows.slice(-7).reduce(function (s, r) { return s + (r.impressions || 0); }, 0);
+    R.info.slice7Bug = slice7;
+    ok('R1: пропуски не сдвигают окно (slice(-7)=' + slice7 + ' ≠ 888)', curImp === 888 && slice7 !== 888, String(slice7));
+
+    // прочие KPI — независимый пересчёт
+    eq('R1: Просмотры = 250', kval('Просмотры'), fmt(sumRange(rows, d0, d1, 'views')));
+    ok('R1: 7 дней по просмотрам = 103',
+      ksub('Просмотры').indexOf('за 7 дней: ' + fmt(sumRange(rows, c7, a, 'views'))) === 0,
+      ksub('Просмотры'));
+    eq('R1: Контакты за период', kval('Контакты'), fmt(sumRange(rows, d0, d1, 'contacts')));
+    var expRate = rateRange(rows, d0, d1, 'views', 'impressions');
+    eq('R1: «Просмотры %» за период', kval('Просмотры %'), pct(expRate));
+    var wRate = rateRange(rows, c7, a, 'views', 'impressions');
+    var pRate = rateRange(rows, p7f, p7t, 'views', 'impressions');
+    var dRate = Math.round((wRate - pRate) / pRate * 100);
+    eq('R1: «Просмотры %» — дельта окна', ksub('Просмотры %'),
+      'за 7 дней: ' + pct(wRate) + ' · к прошлой нед. ' + dRate + '%');
+    eq('R1: «Записи» = 11', kval('Записи'), fmt(11));
+    eq('R1: «Записи новые» = 7', kval('Записи новые'), fmt(7));
+    eq('R1: «Записи старые» = 4', kval('Записи старые'), fmt(4));
+    // ADR-0007: конверсия только по НОВЫМ (7/22 за период)
+    eq('R1: «Контакт → запись» = новые÷контакты', kval('Контакт → запись'), pct(7 / 22));
+    var curNew = sumRange(rows, c7, a, 'bookingsNew'), curCon = sumRange(rows, c7, a, 'contacts');
+    var prvNew = sumRange(rows, p7f, p7t, 'bookingsNew'), prvCon = sumRange(rows, p7f, p7t, 'contacts');
+    eq('R1: «К→З» 7-дневная строка (новые)', ksub('Контакт → запись'),
+      'за 7 дней: ' + pct(curNew / curCon) + ' · к прошлой нед. ' + sdelta(curNew / curCon, prvNew / prvCon));
+    var k2zCell = cd.querySelector('td[data-k2z][data-date="' + a + '"]');
+    eq('ADR-0007: К→З в строке = новые÷контакты', k2zCell && k2zCell.textContent,
+      pct(1 / 2));
+    ok('R1: у всех плашек есть метка периода',
+      cd.querySelectorAll('.kpi .kpi-period').length === 9,
+      String(cd.querySelectorAll('.kpi .kpi-period').length));
+
+    // <14 дней данных → без дельты
+    cw.AvitoUI.render(F.pagi(10));
+    var sub10 = ksub('Показы');
+    ok('R1: 10 дней данных → «за 7 дней: X» без дельты',
+      sub10.indexOf('за 7 дней:') === 0 && sub10.indexOf('к прошлой нед.') < 0, sub10);
+    eq('R1: 10 дней — метка «за всё время (10 дн.)»', kper('Показы'), 'за всё время (10 дн.)');
+
+    // данные «в будущем» → окно 7 дней пустое → «нет данных»
+    cw.AvitoUI.render(F.future());
+    eq('R1: пустое окно → «нет данных»', ksub('Показы'), 'нет данных');
+
+    // пустой набор → «Нет данных за период»
+    cw.AvitoUI.render({ updated: F.todayLocal(), rows: [], edits: [] });
+    ok('R1: пустые данные → «Нет данных за период»',
+      contentText().indexOf('Нет данных за период') >= 0, contentText().slice(0, 120));
+
+    // ADR-0007: контакты есть, новых записей 0 → «—» и в KPI, и в колонке
+    cw.AvitoUI.render(F.zero());
+    eq('ADR-0007: 0 новых записей → К→З «—»', kval('Контакт → запись'), '—');
+    var zc = cd.querySelector('td[data-k2z]');
+    eq('ADR-0007: К→З в строке при 0 → «—»', zc && zc.textContent, '—');
+
+    // правка ячейки → плашки пересчитываются (refreshKpis)
+    cw.AvitoUI.render(F.main());
+    var inp = cd.querySelector('input[data-role="bk"][data-date="' + a + '"][data-kind="new"]');
+    ok('R1: поле правки на якорной дате есть', !!inp);
+    if (inp) {
+      inp.value = '5';
+      inp.dispatchEvent(new cw.Event('input', { bubbles: true }));
+      eq('R1: правка ячейки → KPI «Записи новые» = 11', kval('Записи новые'), fmt(11));
+      eq('ADR-0007: KPI К→З после правки = 11/22', kval('Контакт → запись'), pct(11 / 22));
+      var k2 = cd.querySelector('td[data-k2z][data-date="' + a + '"]');
+      eq('ADR-0007: К→З в строке после правки = 5/2', k2 && k2.textContent, pct(5 / 2));
+      eq('R1: правка не меняет метку периода', kper('Показы'), 'за всё время (37 дн.)');
+      ok('R1: 7-дневная строка после правки на месте',
+        ksub('Записи новые').indexOf('за 7 дней: ') === 0, ksub('Записи новые'));
+      var ls = {};
+      try { ls = JSON.parse(cw.localStorage.getItem('avito_manual_v1') || '{}'); } catch (e) {}
+      ok('R1: правка сохранена в avito_manual_v1',
+        !!(ls.cells && ls.cells[a] && ls.cells[a].new === '5'), JSON.stringify(ls.cells || {}));
+      // возврат к серверному значению (очистка поля)
+      inp.value = '';
+      inp.dispatchEvent(new cw.Event('input', { bubbles: true }));
+      eq('R1: очистка = серверное значение', kval('Записи новые'), fmt(7));
+    }
+  }
+})();
+</script>
+</body>
+</html>
