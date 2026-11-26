@@ -215,6 +215,50 @@
   }
   #content.show { display: block; }
 
+  /* --- фильтр периода (под шапкой, ADR-0002) --- */
+  .pf {
+    max-width: 740px; margin: 0 auto;
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 6px;
+    padding: 8px 0 10px;
+  }
+  .pf-btn {
+    border: 1.5px solid var(--line); background: var(--card); color: var(--muted);
+    font-size: 13.5px; font-weight: 650;
+    padding: 7px 13px; border-radius: 999px; cursor: pointer;
+    min-height: 40px;
+  }
+  .pf-btn:active { background: var(--accent-soft); }
+  .pf-btn.on {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-fg);
+  }
+  .pf-range { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .pf-range[hidden] { display: none; }
+  .pf-lab {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 650; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .pf-lab input {
+    font-family: inherit; font-size: 14.5px; color: inherit;
+    background: var(--bg); border: 1.5px solid var(--line); border-radius: 9px;
+    padding: 6px 8px; min-height: 40px; text-transform: none;
+  }
+  .pf-lab input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .pf-apply {
+    border: 0; border-radius: 9px;
+    background: var(--accent); color: var(--accent-fg);
+    font-size: 13.5px; font-weight: 700;
+    padding: 7px 14px; min-height: 40px; cursor: pointer;
+  }
+  .pf-apply:active { transform: scale(.985); }
+  .pf-err {
+    font-size: 12.5px; font-weight: 650;
+    color: var(--err-tx); background: var(--err-bg);
+    padding: 6px 10px; border-radius: 9px;
+  }
+  .pf-err[hidden] { display: none; }
+
   /* --- строка-вывод (тренд) --- */
   .trend {
     background: var(--accent-soft);
@@ -459,6 +503,19 @@
       <div class="topbar-date" id="topbar-date"></div>
       <button type="button" class="btn-logout" id="lock-again">Выйти</button>
     </div>
+    <!-- фильтр периода: управляет KPI, трендом, графиком и таблицей (R2) -->
+    <div class="pf" id="period-filter" role="group" aria-label="Период статистики">
+      <button type="button" class="pf-btn on" data-p="all">Всё время</button>
+      <button type="button" class="pf-btn" data-p="7">7 дней</button>
+      <button type="button" class="pf-btn" data-p="30">Месяц</button>
+      <button type="button" class="pf-btn" data-p="custom">Период…</button>
+      <span class="pf-range" id="pf-range" hidden>
+        <label class="pf-lab">от<input type="date" id="pf-from"></label>
+        <label class="pf-lab">до<input type="date" id="pf-to"></label>
+        <button type="button" class="pf-apply" id="pf-apply">Применить</button>
+      </span>
+      <span class="pf-err" id="pf-err" role="alert" hidden></span>
+    </div>
   </header>
   <div id="content"></div>
 </div>
@@ -468,7 +525,6 @@
 window.AvitoUI = (function () {
   'use strict';
 
-  var DAYS = 28;                       // окно графика
   var els = null;
 
   function fmt(n) { return Number(n).toLocaleString('ru-RU'); }
@@ -678,15 +734,132 @@ window.AvitoUI = (function () {
       return { label: spec.label, value: kpiDisplay(spec, raw), raw: raw, spec: spec };
     });
   }
-  // метка периода под значением плашки (TASK-2: учитывает фильтр)
-  function periodLabel(rows) {
-    var b = boundsOf(rows);
-    if (!b) return 'нет данных';
+  // метка активного периода под значением плашки (R2)
+  function periodLabel(ab, active, dataB) {
+    if (!active || !active.length) return 'нет данных';
+    if (state.preset === '7') return 'за 7 дней';
+    if (state.preset === '30') return 'за 30 дней';
+    if (state.preset === 'custom' && ab) return ruDate(ab[0]) + '–' + ruDate(ab[1]);
+    var b = dataB || ab;
     return 'за всё время (' + (dayDiff(b[0], b[1]) + 1) + ' дн.)';
   }
   // активный период равен окну «7 дней» → X в 7-дневной строке не дублируем
-  function isSevenWindow() {
-    return state.preset === '7';
+  function isSevenWindow(ab, anchor) {
+    return !!(ab && anchor && ab[0] === addDays(anchor, -6) && ab[1] === anchor);
+  }
+
+  // ==== ФИЛЬТР ПЕРИОДА (R2, ADR-0002) ===================================
+  // state.range = {from, to} | null (null = границы данных); все перерисовки
+  // от фильтра идут только через applyRange(). Данные — из памяти страницы,
+  // без повторных fetch/decrypt.
+  function filterRows(rows, range) {
+    if (!range || (!range.from && !range.to)) return rows;
+    return windowRows(rows, range.from || '0000-01-01', range.to || '9999-12-31');
+  }
+  // приведение диапазона к данным: частичное пересечение — обрезка границами
+  // данных; полное непересечение (период вне данных) — {empty:true}
+  function normRange(range, dataB) {
+    if (!range) return null;
+    if (!dataB) return { empty: true };
+    var f = range.from, t = range.to;
+    if (f && f > dataB[1]) return { empty: true };
+    if (t && t < dataB[0]) return { empty: true };
+    if (f && f < dataB[0]) f = dataB[0];
+    if (t && t > dataB[1]) t = dataB[1];
+    return { from: f || null, to: t || null };
+  }
+  function dataBoundsOf() {
+    if (!lastData || !lastData.rows || !lastData.rows.length) return null;
+    return boundsOf(lastData.rows);
+  }
+  function presetRange(p) {
+    if (p === 'all') return null;
+    var b = dataBoundsOf();
+    if (!b) return null;
+    var a = rangeAnchor(lastData.rows);
+    if (!a) return null;
+    if (p === '7') return { from: addDays(a, -6), to: a };
+    if (p === '30') return { from: addDays(a, -29), to: a };
+    return state.range;                  // «Период…» — диапазон не трогаем
+  }
+  // единое представление: сервер + ручной слой → фильтр → окна 7 дней
+  function computeView() {
+    var rows = lastData ? sortedRows(lastData) : [];
+    var eff = effRows(rows);
+    var dataB = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
+    var range = normRange(state.range, dataB);
+    var active = (range && range.empty) ? [] : filterRows(eff, range);
+    var ab = null;
+    if (range && range.empty) ab = null;
+    else if (range) ab = [range.from || dataB[0], range.to || dataB[1]];
+    else ab = dataB;
+    return { rows: rows, eff: eff, active: active, dataB: dataB, range: range,
+             ab: ab, w7: windows7(eff) };
+  }
+  // одна точка входа на все перерисовки от фильтра; смена фильтра → стр. 1
+  function applyRange() {
+    state.page = 1;
+    rebuild();
+  }
+  // валидация и применение произвольного диапазона («Период…»)
+  function applyCustomRange() {
+    var errEl = document.getElementById('pf-err');
+    function bad(msg) { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } }
+    var b = dataBoundsOf();
+    if (!b) { bad('Нет данных'); return false; }
+    var f = document.getElementById('pf-from').value || null;
+    var t = document.getElementById('pf-to').value || null;
+    if (!f && !t) { bad('Укажите даты «от» и «до»'); return false; }
+    if (f && t && f > t) { bad('Дата «от» позже «до» — не применено'); return false; }
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    state.preset = 'custom';
+    state.range = { from: f, to: t };
+    syncPeriodButtons();
+    applyRange();
+    return true;
+  }
+  function syncPeriodButtons() {
+    var box = document.getElementById('period-filter');
+    if (!box) return;
+    var btns = box.querySelectorAll('.pf-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('on', btns[i].getAttribute('data-p') === state.preset);
+    }
+    var rangeBox = document.getElementById('pf-range');
+    if (rangeBox) rangeBox.hidden = state.preset !== 'custom';
+    if (state.preset !== 'custom') {
+      var errEl = document.getElementById('pf-err');
+      if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+    }
+  }
+  function wirePeriodFilter() {
+    var box = document.getElementById('period-filter');
+    if (!box) return;
+    box.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('.pf-btn') : null;
+      if (!b) return;
+      var p = b.getAttribute('data-p');
+      if (p === 'custom') {
+        var bd = dataBoundsOf();
+        var f = document.getElementById('pf-from');
+        var t = document.getElementById('pf-to');
+        if (bd) {
+          f.value = (state.range && state.range.from) || bd[0];
+          t.value = (state.range && state.range.to) || bd[1];
+        }
+        state.preset = 'custom';
+        syncPeriodButtons();
+        f.focus();
+        return;
+      }
+      state.preset = p;
+      state.range = presetRange(p);
+      syncPeriodButtons();
+      applyRange();
+    });
+    var applyBtn = document.getElementById('pf-apply');
+    if (applyBtn) applyBtn.addEventListener('click', applyCustomRange);
+    syncPeriodButtons();
   }
 
   // ---- строка-вывод (тренд) ---------------------------------------------
@@ -730,7 +903,7 @@ window.AvitoUI = (function () {
     return out;
   }
 
-  function drawChart(rows, edits) {
+  function drawChart(rows, edits, bounds) {
     var canvas = document.getElementById('chart');
     if (!canvas) return;
     var parent = canvas.parentNode;
@@ -752,11 +925,10 @@ window.AvitoUI = (function () {
       txt: cssVar('--txt') || '#17181b'
     };
 
-    // окно: последние DAYS дней, заканчиваясь последней датой данных
-    var lastDate = rows[rows.length - 1].date;
-    var startDate = addDays(lastDate, -(DAYS - 1));
-    var firstDate = rows[0].date;
-    if (dayDiff(startDate, firstDate) > 0) startDate = firstDate;
+    // окно графика = активный период фильтра (R2, ADR-0002)
+    if (!rows.length || !bounds) return;
+    var startDate = bounds[0];
+    var lastDate = bounds[1];
 
     var byDate = {};
     rows.forEach(function (r) { byDate[r.date] = r; });
@@ -778,6 +950,7 @@ window.AvitoUI = (function () {
     var padL = 46, padR = 46, padT = 18, padB = 30;
     var plotW = W - padL - padR, plotH = H - padT - padB;
     var nDays = dayDiff(startDate, lastDate) + 1;
+    canvas.setAttribute('data-days', String(nDays));   // метаданные для тестов
     var step = plotW / nDays;
     var xOf = function (date) { return padL + (dayDiff(startDate, date) + 0.5) * step; };
 
@@ -881,20 +1054,31 @@ window.AvitoUI = (function () {
   // ---- рендер ------------------------------------------------------------
   function render(data) {
     lastData = data;
-    var rows = sortedRows(data);
-    var eff = effRows(rows);            // сервер + правки ячеек + «+ Запись»
-    var period = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
+    rebuild();
+  }
+
+  // полная перерисовка контента из текущего состояния:
+  // загрузка данных, смена фильтра, «+ Запись», сброс ручных значений
+  function rebuild() {
+    if (!lastData) return;
+    var data = lastData;
+    var v = computeView();
+    var rows = v.rows, eff = v.eff, active = v.active;
+    var period = v.ab;                  // границы активного периода (конверсии)
+    var w7 = v.w7;
     var content = els.content;
     content.innerHTML = '';
 
-    if (!rows.length) {
+    if (!active.length) {
       content.innerHTML = '<div class="card">Нет данных за период.</div>';
       show();
       return;
     }
+    var plabel = periodLabel(v.ab, active, v.dataB);
+    var hideX = isSevenWindow(v.ab, w7 && w7.anchor);
 
-    // 1) строка-вывод
-    var tr = trendText(rows, data.edits || []);
+    // 1) строка-вывод — по активному периоду фильтра
+    var tr = trendText(active, data.edits || []);
     var trend = document.createElement('div');
     trend.className = 'trend';
     trend.textContent = 'Тренд: ' + tr.main;
@@ -908,14 +1092,9 @@ window.AvitoUI = (function () {
 
     // 2) KPI-плашки (9): значение за активный период, метка периода отдельной
     //    строкой и 7-дневная строка с дельтой к прошлой неделе (SPEC R1)
-    var active = eff;                 // TASK-2: eff, пропущенный через фильтр
-    var activePeriod = period;
-    var w7 = windows7(eff);
-    var hideX = isSevenWindow();
-    var plabel = periodLabel(active);
     var grid = document.createElement('div');
     grid.className = 'kpi-grid';
-    kpis(active, activePeriod).forEach(function (k) {
+    kpis(active, period).forEach(function (k) {
       var card = document.createElement('div');
       card.className = 'kpi';
       card.setAttribute('data-kpi', k.label);
@@ -930,18 +1109,19 @@ window.AvitoUI = (function () {
       per.textContent = plabel;
       var subEl = document.createElement('div');
       subEl.className = 'kpi-sub';
-      fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: period });
+      fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: v.dataB });
       card.appendChild(lab); card.appendChild(val); card.appendChild(per); card.appendChild(subEl);
       grid.appendChild(card);
     });
     content.appendChild(grid);
 
-    // 3) график 28 дней
+    // 3) график — окно = активный период фильтра (R2)
     var chartCard = document.createElement('div');
     chartCard.className = 'card';
     chartCard.innerHTML =
-      '<h2>28 дней — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», SMA7</h2>' +
-      '<div class="chart-wrap"><canvas id="chart" role="img" aria-label="График статистики за 28 дней"></canvas></div>' +
+      '<h2>' + plabel + ' — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», SMA7</h2>' +
+      '<div class="chart-wrap"><canvas id="chart" role="img" aria-label="График статистики: ' +
+      plabel + '"></canvas></div>' +
       '<div class="legend">' +
       '<span><i class="lg bar"></i>просмотры</span>' +
       '<span><i class="lg l2"></i>Просмотры % (SMA7)</span>' +
@@ -996,7 +1176,7 @@ window.AvitoUI = (function () {
       '</tr></thead><tbody>';
     var editSet = {};
     (data.edits || []).forEach(function (e) { editSet[e] = true; });
-    eff.slice().reverse().forEach(function (r) {
+    active.slice().reverse().forEach(function (r) {
       var ctr = r.impressions ? (r.views || 0) / r.impressions : null;
       var p2c = r.views ? (r.contacts || 0) / r.views : null;
       // К→З = записи_новые_дня ÷ контакты_дня (ADR-0007); пусто/0 → «—»
@@ -1025,14 +1205,14 @@ window.AvitoUI = (function () {
     nav.innerHTML = '<a href="index.html">← План</a>';
     content.appendChild(nav);
 
-    // шапка: обновлено
-    els.date.textContent = 'данные: ' + ruDate(rows[0].date) + ' — ' + ruDate(rows[rows.length - 1].date);
+    // шапка: период, показанный на странице
+    els.date.textContent = 'данные: ' + ruDate(period[0]) + ' — ' + ruDate(period[1]);
 
     show();
-    // отрисовка и перерисовка при ресайзе
-    drawChart(rows, data.edits || []);
+    // отрисовка и перерисовка при ресайзе (дебаунс — TASK-4)
+    drawChart(active, data.edits || [], period);
     if (window.__avitoRO) window.__avitoRO.disconnect();
-    window.__avitoRO = new ResizeObserver(function () { drawChart(rows, data.edits || []); });
+    window.__avitoRO = new ResizeObserver(function () { drawChart(active, data.edits || [], period); });
     window.__avitoRO.observe(chartCard);
   }
 
@@ -1137,14 +1317,13 @@ window.AvitoUI = (function () {
   }
   function refreshKpis() {
     if (!lastData) return;
-    var rows = sortedRows(lastData);
-    var eff = effRows(rows);
-    var period = rows.length ? [rows[0].date, rows[rows.length - 1].date] : null;
-    var w7 = windows7(eff);
-    var hideX = isSevenWindow();
-    var plabel = periodLabel(eff);
+    var v = computeView();
+    var period = v.ab;
+    var w7 = v.w7;
+    var hideX = isSevenWindow(v.ab, w7 && w7.anchor);
+    var plabel = periodLabel(v.ab, v.active, v.dataB);
     var byLabel = {};
-    kpis(eff, period).forEach(function (k) { byLabel[k.label] = k; });
+    kpis(v.active, period).forEach(function (k) { byLabel[k.label] = k; });
     var cards = els.content.querySelectorAll('.kpi[data-kpi]');
     for (var i = 0; i < cards.length; i++) {
       var k = byLabel[cards[i].getAttribute('data-kpi')];
@@ -1157,7 +1336,7 @@ window.AvitoUI = (function () {
       var per = cards[i].querySelector('.kpi-period');
       if (per) per.textContent = plabel;
       var subEl = cards[i].querySelector('.kpi-sub');
-      if (subEl) fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: period });
+      if (subEl) fillSub(subEl, k, { w7: w7, hideX: hideX, dataBounds: v.dataB });
     }
   }
   function wireAddForm(form) {
@@ -1211,14 +1390,19 @@ window.AvitoUI = (function () {
   }
 
   function show() {
+    var first = !els.app.classList.contains('show');
     els.lock.style.display = 'none';
     els.unlocking.classList.remove('show');
     els.app.classList.add('show');
     els.content.classList.add('show');
-    window.scrollTo(0, 0);
+    if (first) window.scrollTo(0, 0);   // наверх — только при первом открытии
   }
 
-  function init(elements) { els = elements; loadManual(); }
+  function init(elements) {
+    els = elements;
+    loadManual();
+    wirePeriodFilter();
+  }
   return { init: init, render: render };
 })();
 </script>

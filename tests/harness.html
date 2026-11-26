@@ -81,6 +81,8 @@
     // ================= TASK-1: окна и «за 7 дней» =======================
     var fix = F.main();
     cw.AvitoUI.render(fix);
+    R.info.afterRender = 'kpi=' + cd.querySelectorAll('.kpi').length +
+      ' content=' + JSON.stringify(contentText().slice(0, 140));
     var rows = sorted(fix);
     var a = F.anchor();
     var addD = F.addDays;
@@ -182,6 +184,113 @@
       inp.dispatchEvent(new cw.Event('input', { bubbles: true }));
       eq('R1: очистка = серверное значение', kval('Записи новые'), fmt(7));
     }
+
+    // ================= TASK-2: фильтр периода ============================
+    function ruDate(d) { return d.slice(8, 10) + '.' + d.slice(5, 7); }
+    function clickPreset(p) {
+      var b = cd.querySelector('#period-filter .pf-btn[data-p="' + p + '"]');
+      ok('R2: кнопка пресета ' + p + ' найдена', !!b);
+      if (b) b.click();
+    }
+    function applyCustom(from, to) {
+      cd.getElementById('pf-from').value = from;
+      cd.getElementById('pf-to').value = to;
+      cd.getElementById('pf-apply').click();
+    }
+    function encRequests() {
+      return cw.performance.getEntriesByType('resource').filter(function (e) {
+        return e.name.indexOf('avito.enc') >= 0;
+      }).length;
+    }
+
+    cw.AvitoUI.render(F.main());
+    // перехват fetch/decrypt: при смене фильтра их быть не должно (R2)
+    var fetchCount = 0, decCount = 0;
+    try {
+      var origFetch = cw.fetch;
+      cw.fetch = function () { fetchCount++; return origFetch.apply(cw, arguments); };
+      R.info.fetchPatch = 'ok';
+    } catch (e) { R.info.fetchPatch = 'failed'; }
+    try {
+      var cs = cw.crypto.subtle;
+      var origDerive = cs.deriveKey;
+      Object.defineProperty(cs, 'deriveKey', {
+        configurable: true, writable: true,
+        value: function () { decCount++; return origDerive.apply(cs, arguments); }
+      });
+      R.info.decryptPatch = 'ok';
+    } catch (e) { R.info.decryptPatch = 'failed'; }
+    var encBefore = encRequests();
+
+    eq('R2: дефолт — «Всё время»',
+      cd.querySelector('#period-filter .pf-btn.on').getAttribute('data-p'), 'all');
+    eq('R2: Всё время = 1967 (регрессия TASK-1)', kval('Показы'), fmt(1967));
+
+    // «7 дней»
+    clickPreset('7');
+    eq('R2: «7 дней» = 888', kval('Показы'), fmt(888));
+    eq('R2: метка «за 7 дней»', kper('Показы'), 'за 7 дней');
+    ok('R2: строка без дубля X (сразу «к прошлой нед.»)',
+      ksub('Показы').indexOf('к прошлой нед.') === 0, ksub('Показы'));
+    eq('R2: таблица = строки окна 7 дней (5 из-за пропусков)',
+      cd.querySelectorAll('.tw tbody tr').length, 5);
+    ok('R2: тренд по активному периоду (контактов 10)',
+      cd.querySelector('.trend').textContent.indexOf('контактов за период: 10') >= 0,
+      cd.querySelector('.trend').textContent);
+    eq('R2: график — окно 7 дней', cd.getElementById('chart').getAttribute('data-days'), '7');
+    ok('R2: заголовок графика отражает период',
+      cd.querySelector('.card h2').textContent.indexOf('за 7 дней') === 0,
+      cd.querySelector('.card h2').textContent);
+
+    // «Месяц» = 30 полных дней
+    clickPreset('30');
+    eq('R2: метка «за 30 дней»', kper('Показы'), 'за 30 дней');
+    var exp30 = sumRange(rows, F.addDays(a, -29), a, 'impressions');
+    eq('R2: «Месяц» = сумма 30 дней', kval('Показы'), fmt(exp30));
+    eq('R2: график — окно 30 дней', cd.getElementById('chart').getAttribute('data-days'), '30');
+    var rows30 = rows.filter(function (r) { return r.date >= F.addDays(a, -29) && r.date <= a; });
+    eq('R2: таблица = строки 30-дневного окна (' + rows30.length + ')',
+      cd.querySelectorAll('.tw tbody tr').length, rows30.length);
+
+    // «Период…» произвольный диапазон
+    clickPreset('custom');
+    ok('R2: поле диапазона раскрылось', !cd.getElementById('pf-range').hidden);
+    applyCustom(F.addDays(a, -20), F.addDays(a, -15));
+    eq('R2: метка произвольного периода', kper('Показы'),
+      ruDate(F.addDays(a, -20)) + '–' + ruDate(F.addDays(a, -15)));
+    var expC = sumRange(rows, F.addDays(a, -20), F.addDays(a, -15), 'impressions');
+    eq('R2: произвольный диапазон (6 дней)', kval('Показы'), fmt(expC));
+    eq('R2: график — окно диапазона', cd.getElementById('chart').getAttribute('data-days'), '6');
+
+    // валидация: от > до → сообщение, значение не применяется
+    applyCustom(F.addDays(a, -5), F.addDays(a, -10));
+    ok('R2: от > до → сообщение', !cd.getElementById('pf-err').hidden &&
+      cd.getElementById('pf-err').textContent.length > 0,
+      cd.getElementById('pf-err').textContent);
+    eq('R2: от > до → прежнее значение не тронуто', kper('Показы'),
+      ruDate(F.addDays(a, -20)) + '–' + ruDate(F.addDays(a, -15)));
+
+    // даты вне данных ограничиваются границами данных
+    applyCustom(F.addDays(a, -100), F.addDays(a, -20));
+    eq('R2: левая граница обрезана данными', kper('Показы'),
+      ruDate(rows[0].date) + '–' + ruDate(F.addDays(a, -20)));
+    var expCl = sumRange(rows, rows[0].date, F.addDays(a, -20), 'impressions');
+    eq('R2: значение после обрезки', kval('Показы'), fmt(expCl));
+
+    // полное непересечение → «Нет данных за период», фильтр живой
+    applyCustom(F.addDays(a, -100), F.addDays(a, -80));
+    ok('R2: пустой диапазон → «Нет данных за период»',
+      contentText().indexOf('Нет данных за период') >= 0, contentText().slice(0, 100));
+    clickPreset('7');
+    eq('R2: после пустого периода фильтр переключается', kval('Показы'), fmt(888));
+    clickPreset('all');
+    eq('R2: возврат на «Всё время» = 1967', kval('Показы'), fmt(1967));
+
+    // повторной расшифровки/запросов при переключениях не было
+    eq('R2: без fetch() при смене фильтра', fetchCount, 0);
+    eq('R2: без avito.enc-запросов при смене фильтра', encRequests() - encBefore, 0);
+    eq('R2: без decrypt при смене фильтра', decCount, 0);
+    eq('R2: запросов avito.enc за тест всего', encBefore, 0);
   }
 })();
 </script>
