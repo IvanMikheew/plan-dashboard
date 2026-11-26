@@ -1,2 +1,5 @@
 # локальный отчёт прогонов harness (генерируется tests/run_harness.ps1)
 tests/last-report.json
+# синтетический .enc для теста расшифровки (генерируется make_test_enc.js)
+tests/test.enc
+tests/_fixture.json

@@ -17,6 +17,20 @@
  */
 (function () {
   var R = { pass: [], fail: [], info: {} };
+  function finish(final) {
+    R.info.pageErrors = errors;
+    if (final) R.done = true;
+    var txt = JSON.stringify(R, null, 1);
+    document.getElementById('report').textContent = txt;
+    // отчёт также уходит на локальный endpoint (реальное время, без виртуальных
+    // часов — в них WebCrypto не завершается): см. tests/report_server.py
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('http://127.0.0.1:8078/report',
+          new Blob([txt], { type: 'text/plain' }));
+      }
+    } catch (e) {}
+  }
   function ok(name, cond, detail) {
     (cond ? R.pass : R.fail).push(name + (cond ? '' : '  :: ' + (detail === undefined ? '' : detail)));
   }
@@ -63,8 +77,7 @@
 
   f.addEventListener('load', async function () {
     try { await run(); } catch (e) { R.fail.push('ИСКЛЮЧЕНИЕ: ' + ((e && e.stack) || e)); }
-    R.info.pageErrors = errors;
-    document.getElementById('report').textContent = JSON.stringify(R, null, 1);
+    finish(true);
     document.title = 'DONE';
   });
 
@@ -542,6 +555,202 @@
       verdictEl() ? verdictEl().textContent : 'нет');
     ok('R5: KPI под блоком «нет данных» на месте', !!kpiCard('Показы'));
     cw.AvitoUI.render(F.main());
+
+    // ======= TASK-5: швы, крипто-контракт, регрессия (чек-лист §5) ======
+    finish();   // промежуточный отчёт: если крипто-часть зависнет — предыдущие
+                // проверки уже записаны в <pre id="report">
+    var TEST_PW = 'fixture-test';  // тестовый пароль к синтетическим .enc (не секрет)
+
+    // проба: WebCrypto + fetch того же .enc в РОДИТЕЛЬСКОМ фрейме (диагностика)
+    try {
+      var tp0 = Date.now();
+      var rr = await fetch('/tests/test.enc');
+      var b64 = await rr.text();
+      var raw0 = Uint8Array.from(atob(b64.replace(/\s+/g, '')), function (ch) { return ch.charCodeAt(0); });
+      var bk0 = await crypto.subtle.importKey('raw', new TextEncoder().encode(TEST_PW),
+        'PBKDF2', false, ['deriveKey']);
+      var k0 = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: raw0.subarray(0, 16), iterations: 200000, hash: 'SHA-256' },
+        bk0, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+      var pt0 = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw0.subarray(16, 28) },
+        k0, raw0.subarray(28));
+      R.info.parentCrypto = 'ok ms=' + (Date.now() - tp0) +
+        ' json=' + (new TextDecoder().decode(pt0).slice(0, 12));
+    } catch (e) { R.info.parentCrypto = 'ERR ' + ((e && e.message) || e); }
+
+    async function loadAvitoSrc(from, to) {
+      var resp = await fetch('/avito.html');
+      var src = await resp.text();
+      var fr = document.createElement('iframe');
+      fr.style.cssText = 'width:780px;height:1100px;border:0';
+      fr.srcdoc = src.split(from).join(to);
+      document.body.appendChild(fr);
+      await new Promise(function (res) { fr.addEventListener('load', res); });
+      return fr;
+    }
+    async function submitPassword(fr, pw, tag) {
+      var c = fr.contentWindow, d = c.document;
+      d.getElementById('password').value = pw;
+      d.getElementById('lock-form').dispatchEvent(new c.Event('submit', { bubbles: true, cancelable: true }));
+      var btn = d.getElementById('submit-btn');
+      for (var i = 0; i < 80; i++) {
+        await new Promise(function (res) { setTimeout(res, 100); });
+        if (d.getElementById('app').classList.contains('show')) return 'ok';
+        if (d.getElementById('error').classList.contains('show')) return d.getElementById('error').textContent;
+      }
+      // таймаут — собираем состояние фрейма для отладки
+      var diag = {
+        btnDisabled: btn.disabled, btn: btn.textContent,
+        errShow: d.getElementById('error').classList.contains('show'),
+        errText: d.getElementById('error').textContent,
+        appShow: d.getElementById('app').classList.contains('show'),
+        unlocking: d.getElementById('unlocking').classList.contains('show'),
+        hasUI: typeof c.AvitoUI, hasLoader: typeof c.DataLoader,
+        subtle: !!(c.crypto && c.crypto.subtle)
+      };
+      R.info['diag_' + (tag || 'x')] = diag;
+      return 'timeout';
+    }
+
+    // (1) контракт шифрования: синтетический .enc (tools/crypt.js) открывается
+    var frOk = await loadAvitoSrc('data/avito.enc', '/tests/test.enc');
+    var res1 = await submitPassword(frOk, TEST_PW, 'enc_ok');
+    eq('§5: .enc того же формата расшифровывается (тестовый пароль)', res1, 'ok');
+    var cdOk = frOk.contentWindow.document;
+    ok('§5: дашборд отрисован из расшифрованных данных',
+      cdOk.querySelectorAll('.kpi').length === 9 && !!cdOk.getElementById('goal'),
+      'kpi=' + cdOk.querySelectorAll('.kpi').length);
+    eq('§5: сессия plan_pw_v1 записана',
+      frOk.contentWindow.sessionStorage.getItem('plan_pw_v1'), TEST_PW);
+
+    // (2) авто-вход из сессии (переход «План ⇄ Статистика»)
+    var frAuto = await loadAvitoSrc('data/avito.enc', '/tests/test.enc');
+    for (var ia = 0; ia < 80; ia++) {
+      await new Promise(function (res) { setTimeout(res, 100); });
+      if (frAuto.contentWindow.document.getElementById('app').classList.contains('show')) break;
+    }
+    ok('§5: авто-вход по sessionStorage plan_pw_v1',
+      frAuto.contentWindow.document.getElementById('app').classList.contains('show'));
+    frAuto.contentWindow.sessionStorage.removeItem('plan_pw_v1');
+
+    // (3) РЕАЛЬНЫЙ data/avito.enc + неверный пароль → «Неверный пароль»
+    cd.getElementById('error').classList.remove('show');
+    cd.getElementById('password').value = 'definitely-wrong-password';
+    cd.getElementById('lock-form').dispatchEvent(new cw.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise(function (res) { setTimeout(res, 3000); });   // fetch + PBKDF2 + GCM fail
+    ok('§5: реальный .enc + неверный пароль → «Неверный пароль»',
+      cd.getElementById('error').classList.contains('show') &&
+      cd.getElementById('error').textContent === 'Неверный пароль',
+      cd.getElementById('error').textContent + ' show=' + cd.getElementById('error').classList.contains('show'));
+
+    // (4) нет файла → «Не удалось загрузить данные»
+    var fr404 = await loadAvitoSrc('data/avito.enc', '/tests/missing.enc');
+    var res404 = await submitPassword(fr404, TEST_PW, 'enc404');
+    eq('§5: нет файла → «Не удалось загрузить данные»',
+      res404, 'Не удалось загрузить данные. Попробуйте позже.');
+
+    // (5) ранее сохранённые avito_manual_v1 читаются новой загрузкой
+    var seed = { cells: {}, adds: [{ bd: a, sd: null, q: 2, t: 'new' }] };
+    seed.cells[a] = { 'new': '9' };
+    cw.localStorage.setItem('avito_manual_v1', JSON.stringify(seed));
+    var frLs = await loadAvitoSrc('data/avito.enc', '/tests/test.enc');
+    var resLs = await submitPassword(frLs, TEST_PW, 'enc_ls');
+    eq('§5: страница открылась с посеянным avito_manual_v1', resLs, 'ok');
+    var cdLs = frLs.contentWindow.document;
+    var kNewLs = cdLs.querySelector('.kpi[data-kpi="Записи новые"] .kpi-value');
+    eq('§5: старые правки читаются (KPI = 7−1+9+2 = 17)',
+      kNewLs && kNewLs.textContent, fmt(17));
+    var inpLs = cdLs.querySelector('input[data-role="bk"][data-date="' + a + '"][data-kind="new"]');
+    eq('§5: ячейка = итог «сервер+правка+добавленные» (11)', inpLs && inpLs.value, '11');
+    frLs.contentWindow.sessionStorage.removeItem('plan_pw_v1');
+    cw.localStorage.removeItem('avito_manual_v1');
+
+    // (6) правило дат + семантика «+ Запись» (правка = введённое − добавленные)
+    cw.AvitoUI.render(F.main());
+    var formEl = cd.getElementById('add-form');
+    ok('§5: форма «+ Запись» на месте', !!formEl);
+    var bdI = cd.getElementById('add-bd');
+    bdI.value = '';
+    formEl.dispatchEvent(new cw.Event('submit', { bubbles: true, cancelable: true }));
+    eq('§5: без даты брони — подсказка, запись не добавлена',
+      cd.getElementById('add-status').textContent, 'Укажите дату брони');
+
+    var k2zBefore = kval('Контакт → запись');
+    formEl = cd.getElementById('add-form');
+    bdI = cd.getElementById('add-bd');
+    bdI.value = a;
+    cd.getElementById('add-sd').value = F.addDays(a, -1);
+    cd.getElementById('add-q').value = '3';
+    cd.querySelector('#add-form .seg button[data-t="old"]').click();
+    formEl.dispatchEvent(new cw.Event('submit', { bubbles: true, cancelable: true }));
+    ok('§5: «+ Запись» — статус показан',
+      cd.getElementById('add-status').textContent.indexOf('Добавлено: 3 × старый') === 0,
+      cd.getElementById('add-status').textContent);
+    eq('§5: старые +3 идут в строку по ДАТЕ СЕАНСА', kval('Записи старые'), fmt(7));
+    eq('§5: K→З от старых не меняется (ADR-0007)', kval('Контакт → запись'), k2zBefore);
+
+    formEl = cd.getElementById('add-form');
+    bdI = cd.getElementById('add-bd');
+    bdI.value = a;
+    cd.getElementById('add-sd').value = a;
+    cd.getElementById('add-q').value = '1';
+    cd.querySelector('#add-form .seg button[data-t="new"]').click();
+    formEl.dispatchEvent(new cw.Event('submit', { bubbles: true, cancelable: true }));
+    eq('§5: K→З пересчитан только по новым ((7+1)/22)',
+      kval('Контакт → запись'), pct(8 / 22));
+
+    // (7) «Сбросить ручные значения»: cancel → ничего, OK → серверные данные
+    cw.confirm = function () { return false; };
+    cd.getElementById('reset-manual').click();
+    eq('§5: сброс отменён — значения не тронуты', kval('Записи старые'), fmt(7));
+    cw.confirm = function () { return true; };
+    cd.getElementById('reset-manual').click();
+    eq('§5: сброс подтверждён → серверные данные', kval('Записи старые'), fmt(4));
+    ok('§5: статус сброса показан',
+      cd.getElementById('add-status').textContent.indexOf('сброшены') >= 0,
+      cd.getElementById('add-status').textContent);
+    eq('§5: localStorage очищен', cw.localStorage.getItem('avito_manual_v1'), null);
+
+    // (8) тёмная и светлая темы: те же media-блоки, форсируемые в копии страницы
+    var srcAll = await (await fetch('/avito.html')).text();
+    ok('§5: в исходнике есть @media (prefers-color-scheme: dark)',
+      srcAll.indexOf('@media (prefers-color-scheme: dark)') >= 0);
+    async function loadForced(html) {
+      var fr = document.createElement('iframe');
+      fr.style.cssText = 'width:780px;height:1100px;border:0';
+      fr.srcdoc = html;
+      document.body.appendChild(fr);
+      await new Promise(function (res) { fr.addEventListener('load', res); });
+      fr.contentWindow.AvitoUI.render(F.main());
+      return fr;
+    }
+    var frDark = await loadForced(
+      srcAll.split('@media (prefers-color-scheme: dark)').join('@media (min-width: 0px)'));
+    var stDark = frDark.contentWindow.getComputedStyle(
+      frDark.contentWindow.document.querySelector('.kpi'));
+    eq('§5: тёмная тема — фон карточки #171a20', stDark.backgroundColor, 'rgb(23, 26, 32)');
+    eq('§5: тёмная тема — светлый текст', stDark.color, 'rgb(233, 235, 239)');
+    // светлая: тёмный media-блок отключён совсем → остаются базовые светлые токены
+    var frLight = await loadForced(
+      srcAll.split('@media (prefers-color-scheme: dark)').join('@media (prefers-color-scheme: no-such-feature)'));
+    var stLight = frLight.contentWindow.getComputedStyle(
+      frLight.contentWindow.document.querySelector('.kpi'));
+    eq('§5: светлая тема — фон карточки #ffffff', stLight.backgroundColor, 'rgb(255, 255, 255)');
+    eq('§5: светлая тема — тёмный текст', stLight.color, 'rgb(23, 24, 27)');
+
+    // (9) телефон 360px: нет горизонтального переполнения, KPI в 2 колонки
+    f.style.width = '360px';
+    await new Promise(function (res) { setTimeout(res, 400); });
+    var docW = cd.documentElement.scrollWidth;
+    ok('§5: 360px — без горизонтального переполнения', docW <= 361, String(docW));
+    var gridCols = cw.getComputedStyle(cd.querySelector('.kpi-grid')).gridTemplateColumns;
+    ok('§5: 360px — KPI в 2 колонки', gridCols.trim().split(/\s+/).length === 2, gridCols);
+    ok('§5: 360px — блок цели и пагинация на месте',
+      !!cd.getElementById('goal') && !!cd.getElementById('pager'));
+    ok('§5: у таблицы aria-label',
+      (cd.querySelector('.tw').getAttribute('aria-label') || '').length > 0);
+    f.style.width = '780px';
+    await new Promise(function (res) { setTimeout(res, 300); });
   }
 })();
 </script>

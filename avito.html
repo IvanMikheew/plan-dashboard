@@ -596,63 +596,83 @@ window.AvitoUI = (function () {
     return d.slice(8, 10) + '.' + d.slice(5, 7);
   }
 
-  // ==== РУЧНЫЕ ЗНАЧЕНИЯ (localStorage этого браузера, поверх серверных) =====
-  // Контракт — в комментарии вверху файла: ключ с версией формата, слой не
-  // трогает шифрование. Пока что — локально; позже переедет в CRM.
+  // ==== ManualStore: слой ручных значений (ШОВ под будущую CRM, ADR-0005) ==
+  // Реализация сейчас — localStorage этого браузера; ключ 'avito_manual_v1'
+  // НЕ переименовывать (потеря данных владельца), формат не меняется:
+  //   { cells: {дата: {new, old}}, adds: [{bd, sd, q, t}] }
   // ПРАВИЛО ДАТ: дата брони ≠ дата сеанса. Строка таблицы = дата сеанса (sd),
   // если указана, иначе дата брони (bd); конверсии — по дате брони.
-  var LS_KEY = 'avito_manual_v1';
-  var manual = { cells: {}, adds: [] };
+  // Будущее (CRM/MySQL): заменить тела методов на REST — интерфейс тот же.
+  // КОНТРАКТ ДЛЯ CRM: запись = {bd, sd, q, t}, ОБЕ даты обязательны
+  // (bd — дата брони, sd — дата сеанса, q — количество, t — new|old).
+  var ManualStore = (function () {
+    var LS_KEY = 'avito_manual_v1';
+    var manual = { cells: {}, adds: [] };
+
+    function load() {
+      try {
+        var s = localStorage.getItem(LS_KEY);
+        var p = s ? JSON.parse(s) : null;
+        manual = (p && typeof p === 'object') ? p : {};
+      } catch (e) { manual = {}; }
+      if (!manual.cells || typeof manual.cells !== 'object') manual.cells = {};
+      if (!manual.adds || Object.prototype.toString.call(manual.adds) !== '[object Array]') manual.adds = [];
+    }
+    function save() {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(manual)); } catch (e) {}
+    }
+    function cellOverride(date, kind) {   // правка ячейки (null = нет правки)
+      var c = manual.cells[date];
+      if (!c) return null;
+      var v = c[kind];
+      if (v === undefined || v === null || v === '') return null;
+      var n = parseInt(v, 10);
+      return isNaN(n) ? null : n;
+    }
+    function isManual(date, kind) { return cellOverride(date, kind) !== null; }
+    function dropCell(date, kind) {       // очистка = возврат к серверному
+      var c = manual.cells[date];
+      if (!c) return;
+      delete c[kind];
+      if (!Object.keys(c).length) delete manual.cells[date];
+      save();
+    }
+    function setCell(date, kind, val) {   // правка (edit)
+      if (!manual.cells[date]) manual.cells[date] = {};
+      manual.cells[date][kind] = String(val);
+      save();
+    }
+    function addedFor(date, kind) {       // сумма «+ Запись», попавших в строку дня
+      var s = 0;
+      manual.adds.forEach(function (a) {
+        var d = a.sd || a.bd;             // строка = дата сеанса, иначе брони
+        if (d === date && (a.t === 'old' ? 'old' : 'new') === kind) s += a.q || 0;
+      });
+      return s;
+    }
+    function adds() { return manual.adds; }              // чтение для пересчёта
+    function add(rec) { manual.adds.push(rec); save(); } // «+ Запись» (add)
+    function clear() {                                  // «Сбросить ручные значения»
+      manual = { cells: {}, adds: [] };
+      try { localStorage.removeItem(LS_KEY); } catch (e) {}
+    }
+    return {
+      load: load, save: save, cellOverride: cellOverride, isManual: isManual,
+      dropCell: dropCell, setCell: setCell, addedFor: addedFor, adds: adds,
+      add: add, clear: clear
+    };
+  })();
+
   var lastData = null;
   var lastStatus = '';
-
-  function loadManual() {
-    try {
-      var s = localStorage.getItem(LS_KEY);
-      var p = s ? JSON.parse(s) : null;
-      manual = (p && typeof p === 'object') ? p : {};
-    } catch (e) { manual = {}; }
-    if (!manual.cells || typeof manual.cells !== 'object') manual.cells = {};
-    if (!manual.adds || Object.prototype.toString.call(manual.adds) !== '[object Array]') manual.adds = [];
-  }
-  function saveManual() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(manual)); } catch (e) {}
-  }
-  function cellOverride(date, kind) {   // правка ячейки (null = нет правки)
-    var c = manual.cells[date];
-    if (!c) return null;
-    var v = c[kind];
-    if (v === undefined || v === null || v === '') return null;
-    var n = parseInt(v, 10);
-    return isNaN(n) ? null : n;
-  }
-  function isManual(date, kind) { return cellOverride(date, kind) !== null; }
-  function dropOverride(date, kind) {
-    var c = manual.cells[date];
-    if (!c) return;
-    delete c[kind];
-    if (!Object.keys(c).length) delete manual.cells[date];
-  }
-  function setOverride(date, kind, val) {
-    if (!manual.cells[date]) manual.cells[date] = {};
-    manual.cells[date][kind] = String(val);
-  }
-  function addedFor(date, kind) {      // сумма «+ Запись», попавших в строку дня
-    var s = 0;
-    manual.adds.forEach(function (a) {
-      var d = a.sd || a.bd;            // строка = дата сеанса, иначе брони
-      if (d === date && (a.t === 'old' ? 'old' : 'new') === kind) s += a.q || 0;
-    });
-    return s;
-  }
   // эффективные строки: сервер + правки ячеек + «+ Запись»
   function effRows(rows) {
     return rows.map(function (r) {
-      var bn = cellOverride(r.date, 'new');
-      var bo = cellOverride(r.date, 'old');
+      var bn = ManualStore.cellOverride(r.date, 'new');
+      var bo = ManualStore.cellOverride(r.date, 'old');
       if (bn === null) bn = (r.bookingsNew == null ? null : r.bookingsNew);
       if (bo === null) bo = (r.bookingsOld == null ? null : r.bookingsOld);
-      var an = addedFor(r.date, 'new'), ao = addedFor(r.date, 'old');
+      var an = ManualStore.addedFor(r.date, 'new'), ao = ManualStore.addedFor(r.date, 'old');
       function merge(b, a) { if (b == null) return a > 0 ? a : null; return b + a; }
       var n = merge(bn, an), o = merge(bo, ao);
       var out = {};
@@ -753,7 +773,7 @@ window.AvitoUI = (function () {
         if (r.baseNew != null) { sBase += r.baseNew; hasBase = true; }
       });
       if (bounds) {
-        manual.adds.forEach(function (a) {
+        ManualStore.adds().forEach(function (a) {
           if (a.t === 'new' && a.bd && a.bd >= bounds[0] && a.bd <= bounds[1]) sAdd += a.q || 0;
         });
       }
@@ -1515,7 +1535,7 @@ window.AvitoUI = (function () {
   }
   function bkCell(r, kind) {
     var v = kind === 'new' ? r.bookingsNew : r.bookingsOld;
-    var ch = isManual(r.date, kind);
+    var ch = ManualStore.isManual(r.date, kind);
     return '<td class="bk-td' + (ch ? ' manual' : '') + '" data-bktd="' + kind + '" data-date="' + r.date + '">' +
       '<input class="bk-input" data-role="bk" data-kind="' + kind + '" data-date="' + r.date + '"' +
       ' inputmode="numeric" pattern="[0-9]*" value="' + (v == null ? '' : v) + '"' +
@@ -1535,17 +1555,16 @@ window.AvitoUI = (function () {
     var d = inp.getAttribute('data-date'), kind = inp.getAttribute('data-kind');
     var digits = String(inp.value).replace(/\D/g, '');
     if (digits !== inp.value) inp.value = digits;
-    var add = addedFor(d, kind);          // «+ Запись», попавшие в эту строку
+    var add = ManualStore.addedFor(d, kind);   // «+ Запись», попавшие в эту строку
     var srv = serverVal(d, kind);
     if (digits === '') {
-      dropOverride(d, kind);              // очистка = вернуться к данным сервера
+      ManualStore.dropCell(d, kind);           // очистка = вернуться к данным сервера
     } else {
       // введённое = итог ячейки (сервер/правка + добавленные) → правка = введённое − добавленные
       var base = Math.max(0, (parseInt(digits, 10) || 0) - add);
-      if (srv != null && base === srv) dropOverride(d, kind);
-      else setOverride(d, kind, base);
+      if (srv != null && base === srv) ManualStore.dropCell(d, kind);
+      else ManualStore.setCell(d, kind, base);
     }
-    saveManual();
     refreshRow(d);
     refreshKpis();
   }
@@ -1565,7 +1584,7 @@ window.AvitoUI = (function () {
       pct(r.bookingsNew / r.contacts) : '—';
     ['old', 'new'].forEach(function (kind) {
       var td = els.content.querySelector('td[data-bktd="' + kind + '"][data-date="' + date + '"]');
-      if (td) td.classList.toggle('manual', isManual(date, kind));
+      if (td) td.classList.toggle('manual', ManualStore.isManual(date, kind));
     });
   }
   function refreshKpis() {
@@ -1621,8 +1640,7 @@ window.AvitoUI = (function () {
       }
       var qty = Math.max(1, parseInt(q.value, 10) || 1);
       var sdVal = sd.value || null;
-      manual.adds.push({ bd: bd.value, sd: sdVal, q: qty, t: type });
-      saveManual();
+      ManualStore.add({ bd: bd.value, sd: sdVal, q: qty, t: type });
       lastStatus = 'Добавлено: ' + qty + ' × ' + (type === 'old' ? 'старый' : 'новый') +
         ', бронь ' + ruDate(bd.value) + (sdVal ? ', сеанс ' + ruDate(sdVal) : ', сеанс не указан');
       var y = window.scrollY || 0;
@@ -1633,8 +1651,7 @@ window.AvitoUI = (function () {
   function wireReset(bar) {
     bar.querySelector('#reset-manual').addEventListener('click', function () {
       if (!window.confirm('Сбросить все ручные значения (правки ячеек и «+ Запись»)?')) return;
-      manual = { cells: {}, adds: [] };
-      try { localStorage.removeItem(LS_KEY); } catch (err) {}
+      ManualStore.clear();
       lastStatus = 'Ручные значения сброшены — показаны данные сервера';
       var y = window.scrollY || 0;
       render(lastData);
@@ -1653,22 +1670,72 @@ window.AvitoUI = (function () {
 
   function init(elements) {
     els = elements;
-    loadManual();
+    ManualStore.load();
     wirePeriodFilter();
   }
   return { init: init, render: render };
 })();
 </script>
 
-<!-- ============ СЛОЙ ДАННЫХ: шифрование (контракт — НЕ менять) ============ -->
+<!-- ============ СЛОЙ ДАННЫХ: DataLoader (шов; шифрование НЕ менять) ====== -->
 <script>
 (function () {
   'use strict';
 
-  // ==== КОНТРАКТНЫЕ КОНСТАНТЫ (не менять) ====
-  var ENC_URL = 'data/avito.enc';
-  var PBKDF2_ITERATIONS = 200000;   // должно совпадать с tools/crypt.js
-  var SALT_LEN = 16, IV_LEN = 12, TAG_LEN = 16; // base64(salt‖iv‖ct+tag)
+  // ==== DataLoader: ЕДИНСТВЕННЫЙ доступ к данным (ШОВ, ADR-0005) =========
+  // КОНТРАКТ ШИФРОВАНИЯ НЕ МЕНЯТЬ — код перенесён байт-в-байт:
+  //   fetch('data/avito.enc') → base64(salt 16 ‖ iv 12 ‖ ct+tag 16)
+  //   ключ = PBKDF2-HMAC-SHA256(password, salt, 200000 итераций, 32 Б)
+  //   → AES-256-GCM; неверный пароль → исключение (GCM tag mismatch)
+  //   расшифрованный текст = JSON {updated, rows[], edits[]}
+  // БУДУЩЕЕ (PHP/MySQL на Reg.ru): заменить тело load() на fetch серверного
+  // API и вернуть ТОТ ЖЕ объект {updated, rows, edits} — рендер не трогается.
+  var DataLoader = (function () {
+    var ENC_URL = 'data/avito.enc';
+    var PBKDF2_ITERATIONS = 200000;   // должно совпадать с tools/crypt.js
+    var SALT_LEN = 16, IV_LEN = 12, TAG_LEN = 16; // base64(salt‖iv‖ct+tag)
+
+    var encryptedB64 = null;
+
+    function b64ToBytes(b64) {
+      var bin = atob(b64.replace(/\s+/g, ''));
+      var out = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+
+    // PBKDF2-SHA256 (200k) → AES-256-GCM decrypt. Бросает исключение при неверном пароле.
+    async function decrypt(b64, password) {
+      var raw = b64ToBytes(b64);
+      if (raw.length < SALT_LEN + IV_LEN + TAG_LEN) throw new Error('bad format');
+      var salt = raw.subarray(0, SALT_LEN);
+      var iv = raw.subarray(SALT_LEN, SALT_LEN + IV_LEN);
+      var ct = raw.subarray(SALT_LEN + IV_LEN);
+      var enc = new TextEncoder();
+      var baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+      var key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+        baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+      );
+      var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
+      return new TextDecoder('utf-8').decode(pt);
+    }
+
+    // → Promise<{updated, rows, edits}>; ошибки: 'load failed' | 'bad data'
+    async function load(password) {
+      if (encryptedB64 === null) {
+        var resp = await fetch(ENC_URL, { cache: 'no-store' });
+        if (!resp.ok) throw new Error('load failed');
+        encryptedB64 = await resp.text();
+      }
+      var text = await decrypt(encryptedB64, password);
+      try { return JSON.parse(text); } catch (e) { throw new Error('bad data'); }
+    }
+
+    function reset() { encryptedB64 = null; }   // «Выйти» — забыть кэш файла
+
+    return { load: load, reset: reset };
+  })();
 
   var form = document.getElementById('lock-form');
   var passInput = document.getElementById('password');
@@ -1689,7 +1756,6 @@ window.AvitoUI = (function () {
 
   var SESSION_KEY = 'plan_pw_v1';   // тот же ключ, что у плана: переход по ссылке — авто-вход
 
-  var encryptedB64 = null;
   var plainJson = null; // расшифрованный JSON — ТОЛЬКО в памяти страницы
 
   function showError(msg) {
@@ -1698,39 +1764,8 @@ window.AvitoUI = (function () {
   }
   function hideError() { errorBox.classList.remove('show'); }
 
-  function b64ToBytes(b64) {
-    var bin = atob(b64.replace(/\s+/g, ''));
-    var out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  }
-
-  // PBKDF2-SHA256 (200k) → AES-256-GCM decrypt. Бросает исключение при неверном пароле.
-  async function decrypt(b64, password) {
-    var raw = b64ToBytes(b64);
-    if (raw.length < SALT_LEN + IV_LEN + TAG_LEN) throw new Error('bad format');
-    var salt = raw.subarray(0, SALT_LEN);
-    var iv = raw.subarray(SALT_LEN, SALT_LEN + IV_LEN);
-    var ct = raw.subarray(SALT_LEN + IV_LEN);
-    var enc = new TextEncoder();
-    var baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-    var key = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-      baseKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
-    );
-    var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, ct);
-    return new TextDecoder('utf-8').decode(pt);
-  }
-
   async function openAvito(password) {
-    if (encryptedB64 === null) {
-      var resp = await fetch(ENC_URL, { cache: 'no-store' });
-      if (!resp.ok) throw new Error('load failed');
-      encryptedB64 = await resp.text();
-    }
-    var text = await decrypt(encryptedB64, password);
-    var data;
-    try { data = JSON.parse(text); } catch (e) { throw new Error('bad data'); }
+    var data = await DataLoader.load(password);
     plainJson = data;
     window.AvitoUI.render(data);
     passInput.value = '';
@@ -1774,7 +1809,7 @@ window.AvitoUI = (function () {
     appEl.classList.remove('show');
     document.getElementById('lock').style.display = '';
     plainJson = null;
-    encryptedB64 = null;
+    DataLoader.reset();
     passInput.value = '';
     hideError();
     window.scrollTo(0, 0);
