@@ -24,6 +24,7 @@
     ok(name, actual === expected, 'ожидалось [' + expected + '], получено [' + actual + ']');
   }
   function fmt(n) { return Number(n).toLocaleString('ru-RU'); }
+  function fmtNum(n) { return fmt(Math.round(n * 10) / 10); }
   function pct(v, d) {
     if (v === null || v === undefined || !isFinite(v)) return '—';
     return (v * 100).toFixed(d === undefined ? 1 : d).replace('.', ',') + '%';
@@ -239,8 +240,8 @@
       cd.querySelector('.trend').textContent);
     eq('R2: график — окно 7 дней', cd.getElementById('chart').getAttribute('data-days'), '7');
     ok('R2: заголовок графика отражает период',
-      cd.querySelector('.card h2').textContent.indexOf('за 7 дней') === 0,
-      cd.querySelector('.card h2').textContent);
+      cd.querySelector('#chart-card h2').textContent.indexOf('за 7 дней') === 0,
+      cd.querySelector('#chart-card h2').textContent);
 
     // «Месяц» = 30 полных дней
     clickPreset('30');
@@ -370,7 +371,7 @@
       return l ? l.textContent : '';
     }
     function chartTitle() {
-      var h = cd.querySelector('.card h2');
+      var h = cd.querySelector('#chart-card h2');
       return h ? h.textContent : '';
     }
     // подсчёт отрисовок (clearRect — один на drawChart) и маркеров (setLineDash)
@@ -438,6 +439,109 @@
       draws >= 1 && draws <= 4, String(draws));
     f.style.width = '780px';
     await new Promise(function (res) { setTimeout(res, 200); });
+
+    // ============ TASK-6: блок «Успеваемость к цели» (R5) ===============
+    function goalEl() { return cd.getElementById('goal'); }
+    function goalData(k) {
+      var g = goalEl();
+      var v = g ? g.getAttribute('data-' + k) : null;
+      return v === null ? null : parseFloat(v);
+    }
+    function goalRowText(label) {
+      var g = goalEl();
+      if (!g) return null;
+      var rr = g.querySelectorAll('.goal-row');
+      for (var i = 0; i < rr.length; i++) {
+        if (rr[i].querySelector('span').textContent === label) {
+          return rr[i].querySelector('b').textContent;
+        }
+      }
+      return null;
+    }
+    function verdictEl() {
+      var g = goalEl();
+      return g ? g.querySelector('.goal-verdict') : null;
+    }
+    function goalBar() { return cd.querySelector('#goal .goal-bar'); }
+
+    cw.AvitoUI.render(F.main());
+    eq('R5: блок цели — первый в контенте (выше KPI)',
+      cd.getElementById('content').firstElementChild && cd.getElementById('content').firstElementChild.id,
+      'goal');
+
+    // независимый расчёт по календарным датам (с учётом пропусков)
+    var win14 = rows.filter(function (r) { return r.date >= F.addDays(a, -13) && r.date <= a; });
+    var fact14 = win14.reduce(function (s, r) { return s + (r.views || 0); }, 0);   // 206
+    var slice14 = rows.slice(-14).reduce(function (s, r) { return s + (r.views || 0); }, 0);
+    R.info.goal14 = { fact: fact14, slice14: slice14 };
+    ok('R5: пропуски не сбивают окно (slice(-14)=' + slice14 + ' ≠ ' + fact14 + ')',
+      fact14 === 206 && slice14 !== fact14, String(slice14));
+
+    eq('R5: накоплено = Σ14 дней (206)', goalData('fact'), fact14);
+    eq('R5: цель 475', goalData('target'), 475);
+    eq('R5: темп «103/нед»', goalRowText('текущий темп'), fmtNum(fact14 * 7 / 14) + '/нед');
+    eq('R5: нужный темп «237,5/нед»', goalRowText('нужный темп'), fmtNum(475 * 7 / 14) + '/нед');
+    eq('R5: прогноз «через 2 недели будет 206»',
+      goalRowText('при текущем темпе через 2 недели будет'), fmt(Math.round(fact14 * 7 / 14 * 2)));
+    eq('R5: «накоплено 206 из 475»', goalRowText('накоплено'), fmt(fact14) + ' из 475');
+    ok('R5: вердикт красный «Не успеваем»',
+      !!verdictEl() && verdictEl().textContent === 'Не успеваем' &&
+      verdictEl().classList.contains('late'),
+      verdictEl() ? verdictEl().textContent : 'нет');
+    var bar = goalBar();
+    ok('R5: aria-прогресс заполнен',
+      !!bar && bar.getAttribute('aria-valuenow') === String(fact14) &&
+      bar.getAttribute('aria-valuemin') === '0' &&
+      bar.getAttribute('aria-valuemax') === '475',
+      bar ? bar.getAttribute('aria-valuenow') + '/' + bar.getAttribute('aria-valuemax') : 'нет бара');
+    var wPct = bar ? parseFloat(bar.querySelector('.goal-bar-fill').style.width) : NaN;
+    ok('R5: ширина бара = 206/475 ≈ 43,4%', Math.abs(wPct - fact14 / 475 * 100) < 0.2, String(wPct));
+
+    // смена фильтра пересчитывает блок (R5 / ADR-0006)
+    clickPreset('7');
+    eq('R5: «7 дней» → цель окна 237,5', goalData('target'), 475 * 7 / 14);
+    eq('R5: «7 дней» → накоплено Σ7 дней', goalData('fact'),
+      sumRange(rows, F.addDays(a, -6), a, 'views'));
+    eq('R5: «7 дней» → темп 103/нед', goalRowText('текущий темп'), '103/нед');
+    eq('R5: «7 дней» → aria-valuemax = 238', goalBar().getAttribute('aria-valuemax'),
+      String(Math.round(475 * 7 / 14)));
+
+    clickPreset('30');
+    eq('R5: «Месяц» → цель ≈ 1017,9 (475×30/14)', goalData('target'), 475 * 30 / 14);
+    eq('R5: «Месяц» → темп = Σ30 дней × 7/30', goalData('pace'),
+      sumRange(rows, F.addDays(a, -29), a, 'views') * 7 / 30);
+
+    applyCustom(F.addDays(a, -4), a);       // произвольные 5 дней
+    eq('R5: «Период…» 5 дней → цель ≈ 169,6', goalData('target'), 475 * 5 / 14);
+
+    clickPreset('all');
+    eq('R5: «Всё время» → окно цели = 475', goalData('target'), 475);
+    eq('R5: «Всё время» → окно 14 дней', goalData('pace'), fact14 * 7 / 14);
+
+    // зелёный случай + переполнение прогресс-бара
+    var fixG = F.main({ green: true });
+    cw.AvitoUI.render(fixG);
+    var rowsG = sorted(fixG);
+    var factG = sumRange(rowsG, F.addDays(a, -13), a, 'views');      // 618
+    eq('R5: зелёный — накоплено Σ14 = 618', goalData('fact'), factG);
+    ok('R5: вердикт зелёный «Успеваем»',
+      !!verdictEl() && verdictEl().textContent === 'Успеваем' &&
+      verdictEl().classList.contains('ok'),
+      verdictEl() ? verdictEl().textContent : 'нет');
+    eq('R5: переполнение → бар 100%',
+      goalBar().querySelector('.goal-bar-fill').style.width, '100%');
+    eq('R5: при переполнении показано факт (618 из 475)',
+      goalRowText('накоплено'), fmt(factG) + ' из 475');
+
+    // <2 дней данных → «—» и серый «нет данных», страница живая
+    cw.AvitoUI.render(F.one());
+    eq('R5: 1 день данных → темп «—»', goalRowText('текущий темп'), '—');
+    ok('R5: серый «нет данных»',
+      !!verdictEl() && verdictEl().textContent === 'нет данных' &&
+      verdictEl().classList.contains('nodata'),
+      verdictEl() ? verdictEl().textContent : 'нет');
+    ok('R5: KPI под блоком «нет данных» на месте', !!kpiCard('Показы'));
+    cw.AvitoUI.render(F.main());
   }
 })();
 </script>

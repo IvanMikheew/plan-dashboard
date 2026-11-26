@@ -215,6 +215,42 @@
   }
   #content.show { display: block; }
 
+  /* --- блок «Успеваемость к цели» (R5, ADR-0006) --- */
+  .goal { margin: 0 0 16px; }
+  .goal-grid { display: flex; flex-direction: column; gap: 8px; }
+  .goal-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px; font-size: 14.5px; line-height: 1.4;
+  }
+  .goal-row span { color: var(--muted); }
+  .goal-row b {
+    font-weight: 750; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .goal-bar {
+    height: 14px; border-radius: 999px;
+    background: var(--st-gray);
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .goal-bar-fill {
+    height: 100%; border-radius: 999px;
+    background: var(--accent);
+    transition: width .3s ease;
+  }
+  .goal-verdict {
+    font-size: 15px; font-weight: 800;
+    padding: 5px 14px; border-radius: 999px;
+    white-space: nowrap;
+  }
+  .goal-verdict.ok { background: var(--st-green); color: #157a3c; }
+  .goal-verdict.late { background: var(--st-red); color: #b3261e; }
+  .goal-verdict.nodata { background: var(--st-gray); color: var(--muted); }
+  @media (prefers-color-scheme: dark) {
+    .goal-verdict.ok { color: #69d18f; }
+    .goal-verdict.late { color: #ff9d92; }
+  }
+
   /* --- фильтр периода (под шапкой, ADR-0002) --- */
   .pf {
     max-width: 740px; margin: 0 auto;
@@ -879,6 +915,88 @@ window.AvitoUI = (function () {
     syncPeriodButtons();
   }
 
+  // ==== БЛОК «УСПЕВАЕМОСТЬ К ЦЕЛИ» (R5, ADR-0006) ======================
+  // Цель владельца — константами в одном месте: правка чисел, не логики.
+  var GOAL = { views: 475, days: 14 };   // +475 показов за 2 недели
+
+  function fmtNum(n) {                   // 237.5 → «237,5», 1017.857 → «1017,9»
+    return fmt(Math.round(n * 10) / 10);
+  }
+  // чистый расчёт блока (без DOM):
+  //  окно = активный период фильтра; «Всё время» (range = null) = окно цели
+  //  [anchor−13..anchor]; цель окна = 475 × длину_окна / 14;
+  //  темп = Σпросмотров × 7 / длина_окна; прогноз = темп × 2 (за 2 недели);
+  //  вердикт: прогноз ≥ 475 → ok, иначе late; <2 дней данных → nodata.
+  function goalStats(rows, range, anchor) {
+    var from, to;
+    if (!range || (!range.from && !range.to)) {
+      if (!anchor) return { verdict: 'nodata' };
+      from = addDays(anchor, -(GOAL.days - 1));
+      to = anchor;
+    } else {
+      from = range.from;
+      to = range.to;
+      if (!from || !to) return { verdict: 'nodata' };
+    }
+    var span = dayDiff(from, to) + 1;             // длина окна, календарных дней
+    if (span < 1) return { verdict: 'nodata' };
+    var win = windowRows(rows, from, to);
+    if (win.length < 2) return { verdict: 'nodata' };  // <2 дней данных в окне
+    var fact = sum(win, 'views') || 0;
+    var target = GOAL.views * span / GOAL.days;
+    var pace = fact * 7 / span;
+    var needPace = GOAL.views * 7 / GOAL.days;
+    var forecast = pace * 2;
+    return {
+      fact: fact, target: target, pace: pace, needPace: needPace,
+      forecast: forecast, verdict: forecast >= GOAL.views ? 'ok' : 'late',
+      span: span, from: from, to: to
+    };
+  }
+  function goalRow(label, value) {
+    return '<div class="goal-row"><span>' + label + '</span><b>' + value + '</b></div>';
+  }
+  // блок UI — первым в контенте, выше KPI-плашек (R5)
+  function goalCard(g) {
+    var card = document.createElement('div');
+    card.className = 'card goal';
+    card.id = 'goal';
+    var title = '<h2>Успеваемость к цели: +' + GOAL.views + ' показов за 2 недели</h2>';
+    var bar, rowsHtml, verdict;
+    if (!g || g.verdict === 'nodata') {
+      bar = '<div class="goal-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0"' +
+        ' aria-valuemax="' + GOAL.views + '" aria-label="Прогресс цели">' +
+        '<div class="goal-bar-fill" style="width:0%"></div></div>';
+      rowsHtml = goalRow('текущий темп', '—') + goalRow('нужный темп', '—') +
+        goalRow('накоплено', '—') +
+        goalRow('при текущем темпе через 2 недели будет', '—');
+      verdict = '<b class="goal-verdict nodata">нет данных</b>';
+    } else {
+      var pctW = Math.min(100, g.target > 0 ? g.fact / g.target * 100 : 0);
+      var rFact = Math.round(g.fact), rTarget = Math.round(g.target);
+      bar = '<div class="goal-bar" role="progressbar" aria-valuenow="' + rFact +
+        '" aria-valuemin="0" aria-valuemax="' + rTarget +
+        '" aria-label="Прогресс цели: ' + rFact + ' из ' + rTarget + '">' +
+        '<div class="goal-bar-fill" style="width:' + pctW.toFixed(1) + '%"></div></div>';
+      rowsHtml = goalRow('текущий темп', fmtNum(g.pace) + '/нед') +
+        goalRow('нужный темп', fmtNum(g.needPace) + '/нед') +
+        goalRow('накоплено', fmt(rFact) + ' из ' + fmt(rTarget)) +
+        goalRow('при текущем темпе через 2 недели будет', fmt(Math.round(g.forecast)));
+      verdict = '<b class="goal-verdict ' + g.verdict + '">' +
+        (g.verdict === 'ok' ? 'Успеваем' : 'Не успеваем') + '</b>';
+    }
+    // точные числа — в data-атрибуты (для тестов и отладки)
+    ['fact', 'target', 'pace', 'needPace', 'forecast'].forEach(function (k) {
+      if (g && g[k] !== undefined) card.setAttribute('data-' + k, String(g[k]));
+    });
+    card.innerHTML = title +
+      '<div class="goal-grid">' + rowsHtml +
+      bar +
+      '<div class="goal-row"><span>вердикт</span>' + verdict + '</div>' +
+      '</div>';
+    return card;
+  }
+
   // ---- строка-вывод (тренд) ---------------------------------------------
   function trendText(rows, edits) {
     var first = rows[0], last = rows[rows.length - 1];
@@ -1221,6 +1339,9 @@ window.AvitoUI = (function () {
     var plabel = periodLabel(v.ab, active, v.dataB);
     var hideX = isSevenWindow(v.ab, w7 && w7.anchor);
 
+    // 0) «Успеваемость к цели» — первый блок контента, выше KPI (R5)
+    content.appendChild(goalCard(goalStats(active, v.range, w7 && w7.anchor)));
+
     // 1) строка-вывод — по активному периоду фильтра
     var tr = trendText(active, data.edits || []);
     var trend = document.createElement('div');
@@ -1263,6 +1384,7 @@ window.AvitoUI = (function () {
     var chartWeekly = dayDiff(period[0], period[1]) + 1 > 90;
     var chartCard = document.createElement('div');
     chartCard.className = 'card';
+    chartCard.id = 'chart-card';
     chartCard.innerHTML =
       '<h2>' + plabel + ' — просмотры (столбцы), «Просмотры %» и «просмотр → контакт», ' +
       (chartWeekly ? 'недельная агрегация (Пн–Вс)' : 'SMA7') + '</h2>' +
