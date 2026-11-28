@@ -581,6 +581,9 @@ window.AvitoUI = (function () {
   var els = null;
 
   function fmt(n) { return Number(n).toLocaleString('ru-RU'); }
+  function fmtCell(v) {                 // null/undefined = данных нет → «—»
+    return (v === null || v === undefined) ? '—' : fmt(v);
+  }
   function pct(v, digits) {
     if (v === null || v === undefined || !isFinite(v)) return '—';
     return (v * 100).toFixed(digits === undefined ? 1 : digits).replace('.', ',') + '%';
@@ -784,12 +787,12 @@ window.AvitoUI = (function () {
       return num / con;
     };
   }
-  // zero: суммы без данных показываем «0» (как раньше), иначе «—»
+  // count: суммы; пустая метрика (null) = данных нет → «—», не 0
   var KPIS = [
-    { label: 'Показы',      m: mSum('impressions'), count: true, zero: true },
-    { label: 'Просмотры',   m: mSum('views'),       count: true, zero: true },
+    { label: 'Показы',      m: mSum('impressions'), count: true },
+    { label: 'Просмотры',   m: mSum('views'),       count: true },
     { label: 'Просмотры %', m: mRate('views', 'impressions') },
-    { label: 'Контакты',    m: mSum('contacts'),    count: true, zero: true },
+    { label: 'Контакты',    m: mSum('contacts'),    count: true },
     { label: 'Просмотр → контакт', m: mRate('contacts', 'views') },
     { label: 'Записи',      m: mSum('bookings'),    count: true },
     { label: 'Записи новые', m: mSum('bookingsNew'), count: true },
@@ -797,7 +800,7 @@ window.AvitoUI = (function () {
     { label: 'Контакт → запись', m: mK2Z() }
   ];
   function kpiDisplay(spec, raw) {
-    if (raw == null) return spec.zero ? fmt(0) : '—';
+    if (raw == null) return '—';        // данных нет (в т.ч. показы «ожидают API»)
     return spec.count ? fmt(raw) : pct(raw);
   }
   // плашки за активный период (rows = строки периода, bounds = его даты)
@@ -1023,7 +1026,7 @@ window.AvitoUI = (function () {
     var parts = [];
     function dir(key, name) {
       var a = first[key], b = last[key];
-      if (!a && !a === 0) return;
+      if (a == null || b == null) return;   // метрика без данных («ожидают API»)
       if (!a) { parts.push(name + ': ' + b + ' в последний день'); return; }
       var p = (b - a) / a;
       var word = p > 0.1 ? 'растут' : p < -0.1 ? 'падают' : 'без изменений';
@@ -1297,10 +1300,10 @@ window.AvitoUI = (function () {
         pct(r.bookingsNew / r.contacts) : '—';
       html += '<tr' + (editSet[r.date] ? ' class="hl"' : '') + '>' +
         '<td>' + ruDate(r.date) + (editSet[r.date] ? ' ✎' : '') + '</td>' +
-        '<td>' + fmt(r.impressions || 0) + '</td>' +
-        '<td>' + fmt(r.views || 0) + '</td>' +
+        '<td>' + fmtCell(r.impressions) + '</td>' +
+        '<td>' + fmtCell(r.views) + '</td>' +
         '<td>' + pct(ctr) + '</td>' +
-        '<td>' + fmt(r.contacts || 0) + '</td>' +
+        '<td>' + fmtCell(r.contacts) + '</td>' +
         '<td>' + pct(p2c) + '</td>' +
         '<td data-sum="1" data-date="' + r.date + '">' + (r.bookings == null ? '—' : fmt(r.bookings)) + '</td>' +
         '<td data-k2z="1" data-date="' + r.date + '">' + k2z + '</td>' +

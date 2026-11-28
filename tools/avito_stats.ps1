@@ -9,7 +9,14 @@
 #   5) POST /stats/v2/accounts/{user_id}/items (grouping=item)  -> per-item totals (cross-check),
 #   6) POST /stats/v1/accounts/{user_id}/items (periodGrouping=day) -> per-item per-day uniq counters,
 #   7) POST /core/v1/accounts/{user_id}/calls/stats/           -> per-item calls,
-#   8) saves raw JSON responses to -RawDir and appends CSV rows (no duplicates).
+#   8) saves raw JSON responses to -RawDir and UPSERTS CSV rows:
+#      - existing row for the date: показы/просмотры/контакты refreshed only when
+#        the API value is STRICTLY GREATER than the stored one (Avito serves fresh
+#        days with a T+1 delay, so 0 = "not counted yet" and is never written into
+#        an empty cell -> empty stays "ожидает API", the dashboard shows "—");
+#      - columns запись/записи_старые/записи_новые (manual owner data) are NEVER
+#        touched;
+#      - new dates are appended (all columns per the header), rows sorted by date.
 #
 # CSV columns: дата,объявление_id,показы,просмотры,контакты,записи,источник
 #   показы   = v2 metric "impressions"
@@ -266,20 +273,25 @@ if ($v1.Ok) {
   Write-Host ('v1 per-day rows parsed: ' + $v1Rows.Count)
 }
 
-# ---------- build CSV rows ----------
+# ---------- build CSV rows (structured) ----------
+# ОБНОВЛЕНИЕ существующих строк: показы/просмотры/контакты перезаписываются из
+# API по правилу «новое > записанного» (пусто = 0): Avito отдаёт свежие даты с
+# задержкой T+1, поэтому 0 = «ещё не посчитано» и НЕ записывается в пустую
+# ячейку (в дашборде пусто = «—», а не фейковый 0). Колонки
+# запись/записи_старые/записи_новые (ручные данные владельца) не трогаются.
 $singleItem = ($itemCount -le 1)
 $csvRows = @()
 foreach ($r in ($dayRows | Sort-Object date)) {
   if ($r.date -lt $DateFrom -or $r.date -gt $DateTo) { continue }
+  $imp = ''; $views = [string]$r.views; $contacts = [string]$r.contacts
   if ($singleItem) {
-    $csvRows += ($r.date + ',' + $ItemId + ',' + $r.impressions + ',' + $r.views + ',' + $r.contacts + ',,avito-api')
+    $imp = [string]$r.impressions
   } else {
     $v1r = $v1Rows[$r.date]
-    $views = ''; $contacts = ''
-    if ($v1r) { $views = $v1r.uniqViews; $contacts = $v1r.uniqContacts }
-    $csvRows += ($r.date + ',' + $ItemId + ',,' + $views + ',' + $contacts + ',,avito-api')
+    if ($v1r) { $views = [string]$v1r.uniqViews; $contacts = [string]$v1r.uniqContacts }
     Write-Host ('WARN multi-item account: показы unavailable per item for ' + $r.date + ' (v2 is profile-level)')
   }
+  $csvRows += [pscustomobject]@{ date = $r.date; imp = $imp; views = $views; contacts = $contacts }
 }
 Write-Host ('CSV rows prepared: ' + $csvRows.Count)
 
@@ -296,22 +308,91 @@ Write-Host ('SUMS (v2, profile): impressions=' + $sumImp + ' views=' + $sumViews
 if ($NoCsv) { Write-Host 'DONE (NoCsv)'; exit 0 }
 if ($csvRows.Count -eq 0) { Write-Host 'WARN: 0 rows - nothing to append'; exit 5 }
 
-# ---------- append to CSV (dedupe by date|itemId) ----------
-$existing = @{}
-if (Test-Path $CsvPath) {
-  foreach ($line in [System.IO.File]::ReadAllLines($CsvPath)) {
-    $p = $line.Split(',')
-    if ($p.Count -ge 2 -and $p[0] -match '^\d{4}-\d{2}-\d{2}$') { $existing[$p[0] + '|' + $p[1]] = $true }
+# ---------- upsert CSV: обновляем метрики, записи не трогаем, сортировка -----
+$enc = New-Object System.Text.UTF8Encoding($false)      # CSV без BOM, CRLF
+$allLines = New-Object System.Collections.Generic.List[string]
+foreach ($line in [System.IO.File]::ReadAllLines($CsvPath, $enc)) { $allLines.Add($line) }
+while ($allLines.Count -gt 0 -and $allLines[$allLines.Count - 1].Trim() -eq '') {
+  $allLines.RemoveAt($allLines.Count - 1)
+}
+$hdr = @($allLines[0] -split ',')
+for ($hi = 0; $hi -lt $hdr.Count; $hi++) { $hdr[$hi] = $hdr[$hi].Trim() }
+$ci = @{}
+foreach ($name in @('дата', 'объявление_id', 'показы', 'просмотры', 'контакты',
+                    'записи', 'записи_старые', 'записи_новые', 'источник')) {
+  $ci[$name] = [array]::IndexOf($hdr, $name)
+}
+if ($ci['показы'] -lt 0 -or $ci['просмотры'] -lt 0) {
+  Write-Host 'FATAL: CSV header mismatch (нет колонок показы/просмотры)'
+  exit 7
+}
+function Get-ColValue([string[]]$f, [int]$i) {
+  if ($i -ge 0 -and $i -lt $f.Count) { return $f[$i].Trim() }
+  return ''
+}
+# индекс существующих строк по дата|объявление
+$idx = @{}
+for ($li = 1; $li -lt $allLines.Count; $li++) {
+  $f = @($allLines[$li] -split ',')
+  if ($f.Count -ge 2 -and $f[0].Trim() -match '^\d{4}-\d{2}-\d{2}$') {
+    $idx[$f[0].Trim() + '|' + $f[1].Trim()] = $li
   }
 }
-$toAdd = @()
-foreach ($line in $csvRows) {
-  $p = $line.Split(',')
-  if (-not $existing.ContainsKey($p[0] + '|' + $p[1])) { $toAdd += $line }
+$upd = 0; $add = 0
+foreach ($r in $csvRows) {
+  $key = $r.date + '|' + $ItemId
+  if ($idx.ContainsKey($key)) {
+    $li = $idx[$key]
+    $f = @($allLines[$li] -split ',')
+    while ($f.Count -lt $hdr.Count) { $f += '' }
+    $changed = $false
+    # правило обновления: пишем только строго большее значение (пусто = 0);
+    # 0 от API = «ещё не посчитано» (T+1) -> ячейка остаётся пустой («ожидает»)
+    $pairs = @(
+      @{ col = 'показы';     val = $r.imp },
+      @{ col = 'просмотры';  val = $r.views },
+      @{ col = 'контакты';   val = $r.contacts }
+    )
+    foreach ($p in $pairs) {
+      $newV = ''
+      if ($p.val -ne '') { $newV = [string]$p.val }
+      if ($newV -eq '') { continue }
+      $ci2 = $ci[$p.col]
+      if ($ci2 -lt 0) { continue }
+      $oldV = Get-ColValue $f $ci2
+      $oldN = 0
+      if ($oldV -ne '') { $oldN = [int]$oldV }
+      $newN = [int]$newV
+      if ($newN -gt $oldN) { $f[$ci2] = $newV; $changed = $true }
+    }
+    if ($ci['источник'] -ge 0 -and (Get-ColValue $f $ci['источник']) -eq '') {
+      $f[$ci['источник']] = 'avito-api'
+      $changed = $true
+    }
+    if ($changed) { $allLines[$li] = ($f -join ','); $upd++ }
+  } else {
+    $f = @()
+    for ($i2 = 0; $i2 -lt $hdr.Count; $i2++) { $f += '' }
+    $f[0] = $r.date
+    $f[1] = $ItemId
+    if ($ci['показы'] -ge 0)     { $f[$ci['показы']] = $r.imp }
+    if ($ci['просмотры'] -ge 0)  { $f[$ci['просмотры']] = $r.views }
+    if ($ci['контакты'] -ge 0)   { $f[$ci['контакты']] = $r.contacts }
+    if ($ci['источник'] -ge 0)   { $f[$ci['источник']] = 'avito-api' }
+    $allLines.Add(($f -join ','))
+    $add++
+  }
 }
-if ($toAdd.Count -gt 0) {
-  [System.IO.File]::AppendAllLines($CsvPath, [string[]]$toAdd, (New-Object System.Text.UTF8Encoding($false)))
-}
-Write-Host ('CSV updated: added ' + $toAdd.Count + ' of ' + $csvRows.Count + ' rows -> ' + $CsvPath)
+# сортировка строк по дате (заголовок остаётся первым)
+$hdrLine = $allLines[0]
+$data = @()
+for ($li2 = 1; $li2 -lt $allLines.Count; $li2++) { $data += $allLines[$li2] }
+$data = @($data | Sort-Object {
+  $d0 = ($_ -split ',')[0].Trim()
+  if ($d0 -match '^\d{4}-\d{2}-\d{2}$') { $d0 } else { '0000-00-00' }
+})
+$outLines = @($hdrLine) + $data
+[System.IO.File]::WriteAllLines($CsvPath, $outLines, $enc)
+Write-Host ('CSV upsert: updated ' + $upd + ', added ' + $add + ', rows sorted by date -> ' + $CsvPath)
 Write-Host 'DONE'
 exit 0

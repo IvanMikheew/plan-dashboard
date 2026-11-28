@@ -88,6 +88,16 @@ if (Test-Path -LiteralPath $calScript) {
 }
 
 # --- 3. CSV -> JSON ---------------------------------------------------------
+function Int-OrNull {
+  # пустая ячейка CSV = данных нет -> null (в дашборде «—»), а НЕ 0:
+  # Avito отдаёт свежие даты с задержкой T+1, 0 = «ещё не посчитано».
+  param($v)
+  if ($v -eq $null) { return $null }
+  $s = "$v".Trim()
+  if ($s -eq '') { return $null }
+  return [int]$s
+}
+
 $rows = @(Import-Csv -LiteralPath $CsvPath -Encoding UTF8)
 if ($rows.Count -eq 0) { Fail 'CSV пуст' 3 }
 
@@ -102,9 +112,9 @@ foreach ($r in $rows) {
   $outRows += [ordered]@{
     date        = "$($r.дата)".Trim()
     item        = "$($r.объявление_id)".Trim()
-    impressions = [int]$r.показы
-    views       = [int]$r.просмотры
-    contacts    = [int]$r.контакты
+    impressions = (Int-OrNull $r.показы)
+    views       = (Int-OrNull $r.просмотры)
+    contacts    = (Int-OrNull $r.контакты)
     bookings    = $bk
     bookingsOld = $bkOld
     bookingsNew = $bkNew

@@ -749,6 +749,21 @@
       !!cd.getElementById('goal') && !!cd.getElementById('pager'));
     ok('§5: у таблицы aria-label',
       (cd.querySelector('.tw').getAttribute('aria-label') || '').length > 0);
+
+    // ===== «Ожидают API» (T+1): null-метрики → «—», а не 0 (фикс 28.11) ====
+    cw.AvitoUI.render(F.nulls());
+    var rowsN = cd.querySelectorAll('.tw tbody tr');
+    eq('null: строк в таблице = 5', rowsN.length, 5);
+    var cellsN = rowsN[2].querySelectorAll('td');       // 3-я сверху = дата a-2 (null)
+    eq('null: ячейка показов = «—», а не 0', cellsN[1].textContent, '—');
+    eq('null: ячейка просмотров = «—»', cellsN[2].textContent, '—');
+    eq('null: ячейка контактов = «—»', cellsN[4].textContent, '—');
+    eq('null: KPI Показы = сумма только непустых (150)', kval('Показы'), fmt(150));
+    eq('null: KPI Просмотры = 15', kval('Просмотры'), fmt(15));
+    eq('null: KPI Просмотры % = 10,0%', kval('Просмотры %'), pct(15 / 150));
+    ok('null: тренд не содержит «null»',
+      cd.querySelector('.trend').textContent.indexOf('null') < 0,
+      cd.querySelector('.trend').textContent);
     f.style.width = '780px';
     await new Promise(function (res) { setTimeout(res, 300); });
   }

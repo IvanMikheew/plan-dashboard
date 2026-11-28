@@ -107,9 +107,21 @@
     return { updated: todayLocal(), rows: rows, edits: [] };
   }
 
+  // «ожидают API» (T+1): у части дней показы/просмотры/контакты = null —
+  // в дашборде такие ячейки должны быть «—», а не 0
+  function nulls() {
+    var a = anchor(), rows = [];
+    rows.push(mk(addDays(a, -4), null, null, null, null, null));
+    rows.push(mk(addDays(a, -3), null, null, null, null, null));
+    rows.push(mk(addDays(a, -2), null, null, null, null, null));
+    rows.push(mk(addDays(a, -1), 100, 10, 1, 1, 0));
+    rows.push(mk(addDays(a, 0), 50, 5, 0, 0, 1));
+    return { updated: todayLocal(), rows: rows, edits: [] };
+  }
+
   root.AvitoFixtures = {
     pad: pad, addDays: addDays, dayDiff: dayDiff,
     todayLocal: todayLocal, anchor: anchor,
-    main: main, pagi: pagi, future: future, one: one, zero: zero
+    main: main, pagi: pagi, future: future, one: one, zero: zero, nulls: nulls
   };
 })(typeof window !== 'undefined' ? window : this);
